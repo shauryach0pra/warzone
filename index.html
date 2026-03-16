@@ -261,19 +261,19 @@ function makePentagon(cx,cy,rx,ry){
 }
 const SHAPES={
   na:[ // Triangle — North America (top-left)
-    [540,80],[60,1920],[1180,1920]
+    [540,80],[60,1750],[1180,1750]
   ],
-  sa:[ // Inverted Triangle — South America. Apex down, base on top (flat line first)
-    [670,3320],[240,2020],[1100,2020]
+  sa:[ // Inverted Triangle — South America — shifted up
+    [670,3050],[240,1850],[1100,1850]
   ],
-  eu:[ // Hexagon — Europe (top-center)
-    [1420,200],[1860,200],[2100,600],[1860,1000],[1420,1000],[1180,600]
+  eu:[ // Hexagon — Europe — shifted right closer to Africa/Asia
+    [2620,80],[3060,80],[3300,480],[3060,880],[2620,880],[2380,480]
   ],
-  af:[ // Rectangle — Africa (center)
-    [1200,1080],[2300,1080],[2300,3000],[1200,3000]
+  af:[ // Rectangle — Africa — shorter height, shifted right near Asia
+    [2400,1150],[3500,1150],[3500,2600],[2400,2600]
   ],
-  as:makePentagon(3700,1100,1360,900),
-  au:makeHex(4560,2820,430),
+  as:makePentagon(4600,1100,1180,860),
+  au:makeHex(4560,2520,430),
   an:[ // Rectangle — Antarctica (bottom strip with margin)
     [100,3380],[5300,3380],[5300,3700],[100,3700]
   ]
@@ -619,7 +619,7 @@ function doShoot(){
   for(let i=0;i<wpn.bullets;i++){
     const a=player.angle+(Math.random()-.5)*wpn.spread;
     const bul=new Bullet(player.x+Math.cos(a)*(P_RAD+7),player.y+Math.sin(a)*(P_RAD+7),
-      Math.cos(a)*B_SPD*(player.weaponIdx===1?1.6:1),Math.sin(a)*B_SPD*(player.weaponIdx===1?1.6:1),'player');
+      Math.cos(a)*B_SPD*(player.weaponIdx===1?1.6:1),Math.sin(a)*B_SPD*(player.weaponIdx===1?1.6:1),'player',CD[player.country]?.acc||null);
     bul.dmg=dmg;bul.crit=isCrit;bul.range=wpn.range;bullets.push(bul);
   }
   if(isCrit)shakeAmt=Math.max(shakeAmt,3);
@@ -636,8 +636,8 @@ function showToast(id,msg,dur=1800){
 
 // ── Bullet class ───────────────────────────────
 class Bullet{
-  constructor(x,y,vx,vy,team){this.x=x;this.y=y;this.vx=vx;this.vy=vy;this.team=team;
-    this.alive=true;this.trail=[];this.dmg=22;this.crit=false;this.range=230;this.dist=0;}
+  constructor(x,y,vx,vy,team,color=null){this.x=x;this.y=y;this.vx=vx;this.vy=vy;this.team=team;
+    this.alive=true;this.trail=[];this.dmg=22;this.crit=false;this.range=230;this.dist=0;this.color=color;}
   update(){
     this.trail.push({x:this.x,y:this.y});if(this.trail.length>6)this.trail.shift();
     if(weatherState==='storm')this.vx+=windX*.04;
@@ -649,15 +649,15 @@ class Bullet{
     if(!this.alive)return;
     const cx=this.x-camera.x+shakeX,cy=this.y-camera.y+shakeY;
     ctx.save();
+    const sc=this.color||(this.team==='player'?(this.crit?'#ffff00':'#ffcc00'):this.team==='friendly'?'#55ff55':'#ff3300');
+    const fc=this.color||(this.team==='player'?(this.crit?'#ffff55':'#ffdd44'):this.team==='friendly'?'#88ff88':'#ff5533');
     for(let i=0;i<this.trail.length;i++){
       const a=(i/this.trail.length)*.38;
       ctx.beginPath();ctx.arc(this.trail[i].x-camera.x+shakeX,this.trail[i].y-camera.y+shakeY,BUL_RAD*.5,0,Math.PI*2);
-      const c=this.crit?`rgba(255,255,80,${a})`:`rgba(255,200,40,${a})`;
-      ctx.fillStyle=c;ctx.fill();
+      ctx.fillStyle=this.color?`${this.color}${Math.floor(a*255).toString(16).padStart(2,'0')}`:`rgba(255,200,40,${a})`;
+      ctx.fill();
     }
     ctx.beginPath();ctx.arc(cx,cy,this.crit?BUL_RAD*1.4:BUL_RAD,0,Math.PI*2);
-    const sc=this.team==='player'?(this.crit?'#ffff00':'#ffcc00'):this.team==='friendly'?'#55ff55':'#ff3300';
-    const fc=this.team==='player'?(this.crit?'#ffff55':'#ffdd44'):this.team==='friendly'?'#88ff88':'#ff5533';
     ctx.shadowBlur=this.crit?16:8;ctx.shadowColor=sc;ctx.fillStyle=fc;ctx.fill();ctx.shadowBlur=0;ctx.restore();
   }
 }
@@ -706,7 +706,8 @@ class Bot{
       if(player?.alive){
         const d=Math.hypot(player.x-this.x,player.y-this.y);
         
-        // Update formation drift for natural movement
+        // Advance orbit angle continuously for smooth patrol around player
+        this.formationOffset.angle += this.formationOffset.driftSpeed * 0.4;
         this.formationOffset.driftPhase += this.formationOffset.driftSpeed;
         
         // Check if player is in home territory
@@ -747,44 +748,41 @@ class Bot{
           // Engage enemy
           this._pursue(this.targetEnemy.x, this.targetEnemy.y, nearestDist, this.targetEnemy, false);
         } else {
-          // Follow player in formation
-          if(d > 80) {
-            // Calculate formation position with natural scattering
-            const formationAngle = this.formationOffset.angle + Math.sin(this.formationOffset.driftPhase) * 0.3;
-            const formationDist = this.formationOffset.distance + Math.sin(this.formationOffset.driftPhase * 1.3) * 20;
-            
-            // Add collision avoidance with other friendly bots
-            let avoidX = 0, avoidY = 0;
-            for(const t of territories) {
-              for(const b of t.bots) {
-                if(b === this || !b.alive || b.team !== 'player') continue;
-                const bd = Math.hypot(b.x - this.x, b.y - this.y);
-                if(bd < this.formationOffset.personalSpace && bd > 0) {
-                  const avoidForce = (this.formationOffset.personalSpace - bd) / this.formationOffset.personalSpace;
-                  avoidX += (this.x - b.x) / bd * avoidForce * 15;
-                  avoidY += (this.y - b.y) / bd * avoidForce * 15;
-                }
+          // Get bot's current angle & distance from player
+          const curAngle = Math.atan2(this.y - player.y, this.x - player.x);
+          const curDist  = Math.hypot(this.x - player.x, this.y - player.y);
+          const orbitR   = this.formationOffset.distance;
+          const orbitSpd = this.formationOffset.driftSpeed * 0.4;
+
+          // Advance angle directly — bot moves along the arc, no target chasing
+          const newAngle = curAngle + orbitSpd;
+
+          // Smoothly converge to desired radius (avoid snapping)
+          const newDist = curDist + (orbitR - curDist) * 0.06;
+
+          this.x = player.x + Math.cos(newAngle) * newDist;
+          this.y = player.y + Math.sin(newAngle) * newDist;
+          this.angle = newAngle + Math.PI * 0.5; // face tangent direction
+
+          // Very soft separation — only when bots overlap significantly
+          for(const t of territories) {
+            for(const b of t.bots) {
+              if(b === this || !b.alive || b.team !== 'player') continue;
+              const bd = Math.hypot(b.x - this.x, b.y - this.y);
+              const minSep = this.rad + b.rad + 4;
+              if(bd < minSep && bd > 0) {
+                const push = (minSep - bd) / minSep * 1.5;
+                this.x += (this.x - b.x) / bd * push;
+                this.y += (this.y - b.y) / bd * push;
               }
             }
-            
-            // Calculate target position
-            const targetX = player.x + Math.cos(formationAngle) * formationDist + avoidX;
-            const targetY = player.y + Math.sin(formationAngle) * formationDist + avoidY;
-            
-            // Move to target with individual speed
-            const moveAngle = Math.atan2(targetY - this.y, targetX - this.x);
-            const speed = this.moveFast * this.formationOffset.speedMultiplier;
-            
-            this.x += Math.cos(moveAngle) * speed;
-            this.y += Math.sin(moveAngle) * speed;
-            this.angle = moveAngle;
-            
-            // Keep in world bounds
-            this.x = Math.max(this.rad, Math.min(WW - this.rad, this.x));
-            this.y = Math.max(this.rad, Math.min(WH - this.rad, this.y));
           }
           
-          // Attack nearby enemies even while following
+          // Keep in world bounds
+          this.x = Math.max(this.rad, Math.min(WW - this.rad, this.x));
+          this.y = Math.max(this.rad, Math.min(WH - this.rad, this.y));
+          
+          // Attack nearby enemies even while patrolling
           if(nearestEnemy && nearestDist < DETECT_RNG * 1.2) {
             this._pursue(nearestEnemy.x, nearestEnemy.y, nearestDist, nearestEnemy, false);
           }
@@ -885,7 +883,7 @@ class Bot{
         this.shootT=this.shootCD;const a=ang+(Math.random()-.5)*.14;
         const bTeam=this.team==='player'?'friendly':'enemy';
         const bul=new Bullet(this.x+Math.cos(a)*(this.rad+5),this.y+Math.sin(a)*(this.rad+5),
-          Math.cos(a)*B_SPD*.78,Math.sin(a)*B_SPD*.78,bTeam);
+          Math.cos(a)*B_SPD*.78,Math.sin(a)*B_SPD*.78,bTeam,CD[this.country]?.acc||null);
         bul.dmg=this.shootDmg;bul.range=this.isBoss?400:this.shootRange;bullets.push(bul);
         // Grenadier: lob a grenade
         if(this.soldierType==='grenadier'&&Math.random()<0.35&&dist<this.shootRange){
@@ -963,8 +961,23 @@ class Player{
     if(mx&&my){mx*=.707;my*=.707;}
     let spd=P_SPD_BASE*(1+this.upgrades.speed*.1);
     if(weatherState==='rain')spd*=.83;if(weatherState==='storm')spd*=.72;
-    this.x=Math.max(P_RAD,Math.min(WW-P_RAD,this.x+mx*spd));
-    this.y=Math.max(P_RAD,Math.min(WH-P_RAD,this.y+my*spd));
+    const prevX=this.x, prevY=this.y;
+    this.x+=mx*spd; this.y+=my*spd;
+    // Globe wrapping — snap camera when crossing edge to avoid lerp glitch
+    let wrapDX=0,wrapDY=0;
+    if(this.x<P_RAD){this.x=WW-P_RAD;camera.x+=WW;wrapDX=WW;}
+    else if(this.x>WW-P_RAD){this.x=P_RAD;camera.x-=WW;wrapDX=-WW;}
+    if(this.y<P_RAD){this.y=WH-P_RAD;camera.y+=WH;wrapDY=WH;}
+    else if(this.y>WH-P_RAD){this.y=P_RAD;camera.y-=WH;wrapDY=-WH;}
+    // Teleport friendly bots with the player
+    if(wrapDX!==0||wrapDY!==0){
+      for(const t of territories){
+        for(const b of t.bots){
+          if(!b.alive||b.team!=='player')continue;
+          b.x+=wrapDX; b.y+=wrapDY;
+        }
+      }
+    }
     this.angle=Math.atan2(mw.y-this.y,mw.x-this.x);
     if(this.shOn){this.shT-=dt;if(this.shT<=0){this.shOn=false;this.shCD=SHIELD_CD;}}
     else if(this.shCD>0)this.shCD-=dt;
@@ -1317,7 +1330,7 @@ function tick(dt){
   // Smooth camera follow player (10% lerp)
   camera.x+=(player.x-canvas.width/2-camera.x)*.1;
   camera.y+=(player.y-canvas.height/2-camera.y)*.1;
-  // Keep camera within world bounds
+  // Clamp camera normally — wrapping handled by player snap above
   camera.x=Math.max(0,Math.min(WW-canvas.width,camera.x));
   camera.y=Math.max(0,Math.min(WH-canvas.height,camera.y));
   
