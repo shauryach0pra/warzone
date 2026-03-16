@@ -676,6 +676,24 @@ class Bot{
     this.meleeT=0;this.chaseT=0;this.shootDmg=(isBoss?35:22)*st.dmgMul;
     this.shootRange=SHOOT_RNG*st.rngMul;
     this.moveSpd=BOT_SPD*st.spdMul;this.moveFast=BOT_FAST*st.spdMul;
+    // Formation system - professional army formation
+    this.formationOffset={
+      // Position in formation circle (0-360 degrees)
+      angle:Math.random() * Math.PI * 2,
+      // Distance from player (scattered natural formation)
+      distance:60 + Math.random() * 80, // 60-140px scattered radius
+      // Individual speed variation
+      speedMultiplier:0.6 + Math.random() * 0.8, // 60%-140% speed
+      // Personal space radius to avoid clustering
+      personalSpace:25 + Math.random() * 15,
+      // Combat priority (0.1-1.0) - higher means more aggressive
+      combatAggression:0.3 + Math.random() * 0.7,
+      // Formation drift for natural movement
+      driftPhase:Math.random() * Math.PI * 2,
+      driftSpeed:0.01 + Math.random() * 0.02
+    };
+    this.targetEnemy = null;
+    this.combatState = 'follow'; // 'follow', 'engage', 'return'
     // Soldier colors match their continent
     this.col=isBoss?'#cc0000':(CD[country]?.acc||'#888888');
     this.bcol=isBoss?'#550000':(CD[country]?.col||'#333333');
@@ -684,47 +702,168 @@ class Bot{
     if(!this.alive)return;
     this.shootT-=dt;this.meleeT-=dt;this.pt-=dt;this.chaseT-=dt;
     if(this.team==='player'){
-      // All friendly bots follow player as backup
+      // Professional army formation with intelligent combat
       if(player?.alive){
         const d=Math.hypot(player.x-this.x,player.y-this.y);
-        // Stop attacking if player is in their own territory
-        if(player && isInHome(player.x, player.y, player.country)){
-          // Still follow but don't attack in home territory
-          if(d>80){
-            const ang=Math.atan2(player.y-this.y,player.x-this.x);
-            this.x+=Math.cos(ang)*this.moveFast;this.y+=Math.sin(ang)*this.moveFast;
-            this.angle=ang;
+        
+        // Update formation drift for natural movement
+        this.formationOffset.driftPhase += this.formationOffset.driftSpeed;
+        
+        // Check if player is in home territory
+        const playerInHome = isInHome(player.x, player.y, player.country);
+        
+        // Find nearby enemies
+        let nearestEnemy = null;
+        let nearestDist = DETECT_RNG * 1.5;
+        for(const t of territories) {
+          for(const b of t.bots) {
+            if(!b.alive || b.team === 'player') continue;
+            const ed = Math.hypot(b.x - this.x, b.y - this.y);
+            if(ed < nearestDist) {
+              nearestDist = ed;
+              nearestEnemy = b;
+            }
           }
-          return;
         }
-        // Follow player and attack enemies when outside home territory
-        if(d>120){
-          const ang=Math.atan2(player.y-this.y,player.x-this.x);
-          this.x+=Math.cos(ang)*this.moveFast;this.y+=Math.sin(ang)*this.moveFast;
-          this.angle=ang;
+        
+        // Combat state machine
+        if(nearestEnemy && nearestDist < this.shootRange * 1.2 && !playerInHome) {
+          this.combatState = 'engage';
+          this.targetEnemy = nearestEnemy;
+        } else if(this.targetEnemy && !this.targetEnemy.alive) {
+          this.combatState = 'return';
+          this.targetEnemy = null;
+        } else if(this.combatState === 'engage' && (!this.targetEnemy || nearestDist > this.shootRange * 2)) {
+          this.combatState = 'return';
+          this.targetEnemy = null;
+        } else if(this.combatState === 'return' && d < this.formationOffset.distance + 50) {
+          this.combatState = 'follow';
+        } else if(!this.targetEnemy) {
+          this.combatState = 'follow';
         }
-        // Attack nearby enemies
-        let best=null,bd=DETECT_RNG*1.4;
-        for(const t of territories)for(const b of t.bots){
-          if(!b.alive||b.team==='player')continue;
-          const ed=Math.hypot(b.x-this.x,b.y-this.y);if(ed<bd){best=b;bd=ed;}
+        
+        // Execute behavior based on state
+        if(this.combatState === 'engage' && this.targetEnemy) {
+          // Engage enemy
+          this._pursue(this.targetEnemy.x, this.targetEnemy.y, nearestDist, this.targetEnemy, false);
+        } else {
+          // Follow player in formation
+          if(d > 80) {
+            // Calculate formation position with natural scattering
+            const formationAngle = this.formationOffset.angle + Math.sin(this.formationOffset.driftPhase) * 0.3;
+            const formationDist = this.formationOffset.distance + Math.sin(this.formationOffset.driftPhase * 1.3) * 20;
+            
+            // Add collision avoidance with other friendly bots
+            let avoidX = 0, avoidY = 0;
+            for(const t of territories) {
+              for(const b of t.bots) {
+                if(b === this || !b.alive || b.team !== 'player') continue;
+                const bd = Math.hypot(b.x - this.x, b.y - this.y);
+                if(bd < this.formationOffset.personalSpace && bd > 0) {
+                  const avoidForce = (this.formationOffset.personalSpace - bd) / this.formationOffset.personalSpace;
+                  avoidX += (this.x - b.x) / bd * avoidForce * 15;
+                  avoidY += (this.y - b.y) / bd * avoidForce * 15;
+                }
+              }
+            }
+            
+            // Calculate target position
+            const targetX = player.x + Math.cos(formationAngle) * formationDist + avoidX;
+            const targetY = player.y + Math.sin(formationAngle) * formationDist + avoidY;
+            
+            // Move to target with individual speed
+            const moveAngle = Math.atan2(targetY - this.y, targetX - this.x);
+            const speed = this.moveFast * this.formationOffset.speedMultiplier;
+            
+            this.x += Math.cos(moveAngle) * speed;
+            this.y += Math.sin(moveAngle) * speed;
+            this.angle = moveAngle;
+            
+            // Keep in world bounds
+            this.x = Math.max(this.rad, Math.min(WW - this.rad, this.x));
+            this.y = Math.max(this.rad, Math.min(WH - this.rad, this.y));
+          }
+          
+          // Attack nearby enemies even while following
+          if(nearestEnemy && nearestDist < DETECT_RNG * 1.2) {
+            this._pursue(nearestEnemy.x, nearestEnemy.y, nearestDist, nearestEnemy, false);
+          }
         }
-        if(best&&bd<DETECT_RNG*1.2)this._pursue(best.x,best.y,bd,best,false);
       }
     }else{
       if(!player?.alive){this._wander();return;}
-      const d=Math.hypot(player.x-this.x,player.y-this.y);
-      // Stop pursuing if player is in their own territory
-      if(isInHome(player.x,player.y,player.country)){this._wander();return;}
-      // 9. Screen-based detection: detect if bot is on screen (player can see it)
+      
+      // Check if all player forces are in home territory
+      let allPlayerForcesInHome = true;
+      let hasPlayerForces = false;
+      
+      // Check player
+      if(player?.alive && !isInHome(player.x, player.y, player.country)){
+        allPlayerForcesInHome = false;
+        hasPlayerForces = true;
+      }
+      
+      // Check all friendly bots
+      for(const t of territories) {
+        for(const b of t.bots) {
+          if(!b.alive || b.team !== 'player') continue;
+          hasPlayerForces = true;
+          if(!isInHome(b.x, b.y, b.country)){
+            allPlayerForcesInHome = false;
+            break;
+          }
+        }
+        if(!allPlayerForcesInHome) break;
+      }
+      
+      // If all player forces are in home territory, stop attacking
+      if(allPlayerForcesInHome && hasPlayerForces){
+        this._wander();
+        return;
+      }
+      
+      // Find closest target from player's army (player + friendly bots)
+      let closestTarget = null;
+      let closestDist = Infinity;
+      
+      // Check player as potential target
+      if(player?.alive && !isInHome(player.x,player.y,player.country)){
+        const playerDist = Math.hypot(player.x-this.x,player.y-this.y);
+        if(playerDist < closestDist){
+          closestDist = playerDist;
+          closestTarget = player;
+        }
+      }
+      
+      // Check all friendly bots as potential targets
+      for(const t of territories) {
+        for(const b of t.bots) {
+          if(!b.alive || b.team !== 'player') continue;
+          // Only target bots that are not in their home territory
+          if(isInHome(b.x, b.y, b.country)) continue;
+          const botDist = Math.hypot(b.x-this.x,b.y-this.y);
+          if(botDist < closestDist){
+            closestDist = botDist;
+            closestTarget = b;
+          }
+        }
+      }
+      
+      // Detection logic
       const bsx=this.x-camera.x,bsy=this.y-camera.y;
       const onScreen=bsx>-80&&bsx<canvas.width+80&&bsy>-80&&bsy<canvas.height+80;
-      const inLOC=!getTAt(player.x,player.y);
+      const inLOC=!getTAt(closestTarget?.x||player.x,closestTarget?.y||player.y);
       const baseDet=onScreen?99999:(inLOC?DETECT_RNG+LOC_BONUS:DETECT_RNG);
-      if(d<baseDet||this.chaseT>0){
-        if(d<baseDet)this.chaseT=3500;
-        this._pursue(player.x,player.y,d,player,isInHome(player.x,player.y,player.country));
-      }else this._wander();
+      
+      if(closestTarget && (closestDist < baseDet || this.chaseT > 0)){
+        if(closestDist < baseDet) this.chaseT = 3500;
+        const targetInHome = closestTarget === player ? 
+          isInHome(player.x, player.y, player.country) : 
+          isInHome(closestTarget.x, closestTarget.y, closestTarget.country);
+        this._pursue(closestTarget.x, closestTarget.y, closestDist, closestTarget, targetInHome);
+      } else {
+        this._wander();
+      }
     }
     this.x=Math.max(this.rad,Math.min(WW-this.rad,this.x));
     this.y=Math.max(this.rad,Math.min(WH-this.rad,this.y));
@@ -1213,10 +1352,21 @@ function tick(dt){
   for(const b of bullets){
     if(!b.alive)continue;
     if(b.team==='enemy'){
+      // Check collision with player
       if(player.shOn&&Math.hypot(b.x-player.x,b.y-player.y)<P_RAD+16){b.alive=false;spark(b.x,b.y,'#88aaff',4);}
       else if(!player.shOn&&Math.hypot(b.x-player.x,b.y-player.y)<P_RAD+BUL_RAD){
         const dmg=b.dmg||22;player.hp-=dmg;b.alive=false;stats.dmgTaken+=dmg;
         spark(player.x,player.y,'#ff4444',7);snd('hit');shakeAmt=Math.max(shakeAmt,9);
+      }
+      // Check collision with friendly bots
+      if(b.alive){
+        for(const t of territories)for(const bot of t.bots){
+          if(!bot.alive||bot.team!=='player')continue;
+          if(Math.hypot(b.x-bot.x,b.y-bot.y)<bot.rad+BUL_RAD){
+            const dmg=b.dmg||22;bot.hit(dmg);b.alive=false;spark(bot.x,bot.y,'#ff4444',4);snd('hit');
+            break;
+          }
+        }
       }
     }
     if(b.team==='player'||b.team==='friendly'){
