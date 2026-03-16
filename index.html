@@ -180,7 +180,7 @@ const P_HP=100,BOT_HP=45,BOSS_HP=360;
 const SHOOT_RNG=230,DETECT_RNG=280,MELEE_RNG=48;
 const MELEE_DMG=13,LOC_BONUS=120;
 const REINFORCE_INTERVAL=60000;
-const AIRDROP_INTERVAL=90000,BOSS_SPAWN_TIME=90000;
+const BOSS_SPAWN_TIME=90000;
 const NIGHT_CYCLE=300000;
 const XP_PER_KILL=25,XP_PER_ZONE=200,XP_PER_BOSS=500;
 // Enemy airstrike: fires every 35-65s
@@ -275,9 +275,9 @@ let enemyStrikeTimer=ENEMY_STRIKE_MIN+Math.random()*(ENEMY_STRIKE_MAX-ENEMY_STRI
 
 // ── State ──────────────────────────────────────
 let gState='menu',player=null;
-let bullets=[],particles=[],airdrops=[],explosions=[],tripmines=[];
+let bullets=[],particles=[],explosions=[],tripmines=[];
 let camera={x:0,y:0},keys={},mouse={x:0,y:0},mw={x:0,y:0};
-let lastT=0,curZone='',reinTimer=0,airdropTimer=AIRDROP_INTERVAL,bossSpawnTimer=BOSS_SPAWN_TIME;
+let lastT=0,curZone='',reinTimer=0,bossSpawnTimer=BOSS_SPAWN_TIME;
 const _tt={};
 let bossBot=null,bossDefeated=false;
 let killStreak=0,totalKills=0;
@@ -323,6 +323,10 @@ addEventListener('keydown',e=>{
   ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].forEach(k=>{if(k===e.code)e.preventDefault();});
 });
 addEventListener('keyup',e=>keys[e.code]=false);
+// Add blur event listener to clear keys when window loses focus
+addEventListener('blur',()=>keys={});
+// Add visibility change listener to clear keys when tab becomes inactive
+document.addEventListener('visibilitychange',()=>{if(document.hidden)keys={};});
 addEventListener('mousemove',e=>{mouse.x=e.clientX;mouse.y=e.clientY;});
 
 // ── Audio (Web Audio API) ──────────────────────
@@ -372,7 +376,6 @@ function snd(t,vol=1){
     else if(t==='nuke')noise(.9,250,.65);
     else if(t==='reinforce')tone(180,'square',.32,.09);
     else if(t==='thunder')noise(.9,300,.44);
-    else if(t==='airdrop')tone(660,'sine',.4,.1);
     else if(t==='strike_warn'){tone(440,'sawtooth',.08,.12);setTimeout(()=>tone(880,'sawtooth',.08,.12),120);}
   }catch{}
 }
@@ -385,43 +388,6 @@ function spark(x,y,col,n=6,sp=3.5){
 function floatText(x,y,txt,col='#ffff44'){
   particles.push({x,y,vx:0,vy:-1.1,life:1,col,sz:0,txt});}
 
-// ── Airdrop ────────────────────────────────────
-function spawnAirdrop(){
-  airdrops.push({x:300+Math.random()*(WW-600),y:300+Math.random()*(WH-600),alive:true,timer:18000,pulse:0});
-  snd('airdrop');
-}
-function drawAirdrops(){
-  const now=Date.now()/500;
-  for(const a of airdrops){
-    if(!a.alive)continue;
-    const sx=a.x-camera.x+shakeX,sy=a.y-camera.y+shakeY;
-    if(sx<-40||sx>canvas.width+40||sy<-40||sy>canvas.height+40)continue;
-    const blink=Math.sin(now+a.pulse)>0;
-    ctx.save();ctx.translate(sx,sy);
-    ctx.strokeStyle=blink?'rgba(255,255,255,.7)':'rgba(255,255,255,.2)';ctx.lineWidth=.8;
-    [-12,-4,4,12].forEach(dx=>{ctx.beginPath();ctx.moveTo(dx,-24);ctx.lineTo(0,0);ctx.stroke();});
-    ctx.beginPath();ctx.arc(0,-24,13,Math.PI,0,false);
-    ctx.fillStyle=blink?'rgba(255,240,80,.65)':'rgba(150,140,50,.28)';ctx.fill();
-    ctx.strokeStyle=blink?'rgba(255,240,80,.9)':'rgba(150,140,50,.45)';ctx.lineWidth=1;ctx.stroke();
-    ctx.fillStyle=blink?'#884400':'#442200';ctx.fillRect(-9,-8,18,14);
-    ctx.strokeStyle=blink?'#ffaa44':'#663300';ctx.lineWidth=1.5;ctx.strokeRect(-9,-8,18,14);
-    const pct=a.timer/18000;
-    ctx.fillStyle='rgba(0,0,0,.5)';ctx.fillRect(-22,12,44,3);
-    ctx.fillStyle=pct>.5?'#44ff88':'#ff4444';ctx.fillRect(-22,12,44*pct,3);
-    ctx.restore();
-  }
-}
-function checkAirdrops(){
-  if(!player?.alive)return;
-  for(const a of airdrops){
-    if(!a.alive)continue;
-    if(Math.hypot(a.x-player.x,a.y-player.y)<28){
-      a.alive=false;snd('pickup');
-      player.hp=player.maxHp;showToast('pickupToast','FULL HEAL!',2000);
-      spark(a.x,a.y,'#44ff88',14);shakeAmt=Math.max(shakeAmt,5);
-    }
-  }
-}
 
 // ── Enemy Automatic Airstrikes ─────────────────
 function tickEnemyStrikes(dt){
@@ -475,7 +441,6 @@ function launchEnemyStrike(){
       const tx=Math.max(100,Math.min(WW-100,player.x+(Math.random()-0.5)*180));
       const ty=Math.max(100,Math.min(WH-100,player.y+(Math.random()-0.5)*180));
       enemyStrikes.push({x:tx,y:ty,radius:STRIKE_RADIUS,warnLeft:STRIKE_WARN_TIME,hit:false,hitAge:0,srcCountry:src?.country||'as',strikeIdx:i});
-      if(i>0)snd('strike_warn');
     },i*1200);
   }
 }
@@ -503,9 +468,9 @@ function updateTripmines(dt){
         m.alive=false;
         explosions.push({x:m.x,y:m.y,r:0,maxR:70,life:1,col:'#ff6600'});
         spark(m.x,m.y,'#ff4400',22,6);spark(m.x,m.y,'#ffcc44',10,3);
-        shakeAmt=Math.max(shakeAmt,18);snd('explosion');
-        if(!player.shOn){const dmg=55;player.hp-=dmg;stats.dmgTaken+=dmg;snd('hit');floatText(player.x,player.y-24,'TRIPMINE!','#ff4400');shakeAmt=20;}
-        else{floatText(player.x,player.y-24,'BLOCKED!','#88aaff');}
+        shakeAmt=Math.max(shakeAmt,18);
+        if(!player.shOn){const dmg=55;player.hp-=dmg;stats.dmgTaken+=dmg;snd('hit');shakeAmt=20;}
+        else{shakeAmt=20;}
         continue;
       }
     }
@@ -518,7 +483,7 @@ function updateTripmines(dt){
           m.alive=false;
           explosions.push({x:m.x,y:m.y,r:0,maxR:70,life:1,col:'#ff6600'});
           spark(m.x,m.y,'#ff4400',22,6);spark(m.x,m.y,'#ffcc44',10,3);
-          shakeAmt=Math.max(shakeAmt,8);snd('explosion');
+          shakeAmt=Math.max(shakeAmt,8);
           b.hit(55);break;
         }
       }
@@ -571,7 +536,7 @@ function triggerAirstrike(){
     setTimeout(()=>{
       explosions.push({x:tx,y:ty,r:0,maxR:95,life:1,col:'#ff6600'});
       spark(tx,ty,'#ff4400',20,6);spark(tx,ty,'#ffcc44',10,4);
-      shakeAmt=Math.max(shakeAmt,13);snd('explosion');
+      shakeAmt=Math.max(shakeAmt,13);
       for(const t of territories)for(const b of t.bots){
         if(!b.alive)continue;const d=Math.hypot(b.x-tx,b.y-ty);
         if(d<95){b.hit(75*(1-d/95));if(!b.alive){totalKills++;stats.kills++;onKill();addXP(XP_PER_KILL);}}
@@ -590,7 +555,7 @@ function triggerNuke(){
   setTimeout(()=>{
     explosions.push({x:nx,y:ny,r:0,maxR:NUKE_STRIKE_RADIUS,life:1,col:'#ffff00'});
     spark(nx,ny,'#ffff00',60,14);spark(nx,ny,'#ff8800',40,8);
-    shakeAmt=35;snd('explosion');lightningFlash=0.9;
+    shakeAmt=35;lightningFlash=0.9;
     // Damage everything in the nuke radius
     for(const t of territories)for(const b of t.bots){
       if(!b.alive||b.team==='player')continue;
@@ -622,7 +587,7 @@ function doShoot(){
   const wpn=WEAPONS[player.weaponIdx];
   player.shootCD=wpn.rof;stats.shotsFired++;
   const dmgMul=(1+player.upgrades.damage*.25);
-  const isCrit=Math.random()<.2;if(isCrit){stats.crits++;snd('crit');}
+  const isCrit=Math.random()<.2;if(isCrit){stats.crits++;}
   const dmg=wpn.dmg*(isCrit?2.2:1)*dmgMul;
   const sndName=player.weaponIdx===1?'sniper':player.weaponIdx===2?'shotgun':'shoot';
   snd(sndName);
@@ -694,36 +659,38 @@ class Bot{
     if(!this.alive)return;
     this.shootT-=dt;this.meleeT-=dt;this.pt-=dt;this.chaseT-=dt;
     if(this.team==='player'){
-      // 10. Role-based: escorts follow player, guards stay at territory
-      if(this.role==='escort'&&player?.alive){
+      // All friendly bots follow player as backup
+      if(player?.alive){
         const d=Math.hypot(player.x-this.x,player.y-this.y);
-        // Stay close but not on top of player
-        if(d>100){
+        // Stop attacking if player is in their own territory
+        if(player && isInHome(player.x, player.y, player.country)){
+          // Still follow but don't attack in home territory
+          if(d>80){
+            const ang=Math.atan2(player.y-this.y,player.x-this.x);
+            this.x+=Math.cos(ang)*this.moveFast;this.y+=Math.sin(ang)*this.moveFast;
+            this.angle=ang;
+          }
+          return;
+        }
+        // Follow player and attack enemies when outside home territory
+        if(d>120){
           const ang=Math.atan2(player.y-this.y,player.x-this.x);
           this.x+=Math.cos(ang)*this.moveFast;this.y+=Math.sin(ang)*this.moveFast;
           this.angle=ang;
         }
-        // Still attack nearby enemies
+        // Attack nearby enemies
         let best=null,bd=DETECT_RNG*1.4;
         for(const t of territories)for(const b of t.bots){
           if(!b.alive||b.team==='player')continue;
           const ed=Math.hypot(b.x-this.x,b.y-this.y);if(ed<bd){best=b;bd=ed;}
         }
         if(best&&bd<DETECT_RNG*1.2)this._pursue(best.x,best.y,bd,best,false);
-      }else{
-        // Guard: patrol territory, attack nearby enemies
-        let best=null,bd=DETECT_RNG*1.4;
-        for(const t of territories)for(const b of t.bots){
-          if(!b.alive||b.team==='player')continue;
-          const d=Math.hypot(b.x-this.x,b.y-this.y);if(d<bd){best=b;bd=d;}
-        }
-        if(bossBot?.alive){const d=Math.hypot(bossBot.x-this.x,bossBot.y-this.y);if(d<bd){best=bossBot;bd=d;}}
-        if(best)this._pursue(best.x,best.y,bd,best,false);
-        else this._wander();
       }
     }else{
       if(!player?.alive){this._wander();return;}
       const d=Math.hypot(player.x-this.x,player.y-this.y);
+      // Stop pursuing if player is in their own territory
+      if(isInHome(player.x,player.y,player.country)){this._wander();return;}
       // 9. Screen-based detection: detect if bot is on screen (player can see it)
       const bsx=this.x-camera.x,bsy=this.y-camera.y;
       const onScreen=bsx>-80&&bsx<canvas.width+80&&bsy>-80&&bsy<canvas.height+80;
@@ -761,7 +728,7 @@ class Bot{
           setTimeout(()=>{
             const gx=tx+(Math.random()-0.5)*80,gy=ty+(Math.random()-0.5)*80;
             explosions.push({x:gx,y:gy,r:0,maxR:80,life:1,col:'#ff6600'});
-            spark(gx,gy,'#ff4400',16,5);shakeAmt=Math.max(shakeAmt,8);snd('explosion');
+            spark(gx,gy,'#ff4400',16,5);shakeAmt=Math.max(shakeAmt,8);
             if(player?.alive){const d=Math.hypot(player.x-gx,player.y-gy);if(d<80&&!player.shOn){const dmg=35*(1-d/80);player.hp-=dmg;stats.dmgTaken+=dmg;snd('hit');}}
           },800+Math.random()*400);
         }
@@ -783,8 +750,8 @@ class Bot{
   }
   hit(dmg){
     this.hp-=dmg;spark(this.x,this.y,'#ff8844',this.isBoss?7:4);
-    if(this.hp<=0){this.alive=false;spark(this.x,this.y,'#ff5500',this.isBoss?22:12);snd(this.isBoss?'explosion':'death');
-      if(this.isBoss){addXP(XP_PER_BOSS);showToast('levelToast','BOSS DEFEATED! +500 XP',2800);shakeAmt=25;bossDefeated=true;}
+    if(this.hp<=0){this.alive=false;spark(this.x,this.y,'#ff5500',this.isBoss?22:12);
+      if(this.isBoss){addXP(XP_PER_BOSS);shakeAmt=25;bossDefeated=true;}
     }
   }
   draw(){
@@ -938,7 +905,6 @@ function checkCapture(){
       // Overwrite CD colours for this territory's rendering so it looks like player's land
       // (we use t.country so CD[player.country] is automatically used everywhere already)
       snd('capture');stats.zonesCapt++;addXP(XP_PER_ZONE);
-      showToast('reinToast','TERRITORY CAPTURED! +200 XP',2500);
       shakeAmt=Math.max(shakeAmt,8);
       t.bots=[];
       for(let i=0;i<6;i++){const[bx,by]=randomInTerr(t);t.bots.push(new Bot(bx,by,player.country,'player',t,false,'grunt'));}
@@ -1129,7 +1095,7 @@ function updateHUD(){
   dailyChallenges.forEach((ch,i)=>{
     if(challengeDone[i])return;
     const prog=stats[ch.stat]||0;
-    if(prog>=ch.goal){challengeDone[i]=true;addXP(500);showToast('levelToast','CHALLENGE DONE! +500 XP',2400);snd('capture');}
+    if(prog>=ch.goal){challengeDone[i]=true;addXP(500);}
   });
 }
 function bumpEl(id){}
@@ -1157,6 +1123,7 @@ function startGame(){
   document.getElementById('menu').style.display='none';
   document.getElementById('hud').style.display='block';
   gState='playing';
+  keys={}; // Reset keys to prevent automatic movement
   player=new Player(selC,name);
   for(const t of territories)spawnBots(t,selC);
   initRain();spawnTripmines();
@@ -1194,7 +1161,7 @@ function tick(dt){
   }
   if(weatherState==='rain'||weatherState==='storm')updateRain(dt);
   lightningFlash*=.88;
-  if(weatherState==='storm'){lightningTimer-=dt;if(lightningTimer<=0){lightningTimer=3000+Math.random()*8000;lightningFlash=1;snd('thunder');}}
+  if(weatherState==='storm'){lightningTimer-=dt;if(lightningTimer<=0){lightningTimer=3000+Math.random()*8000;lightningFlash=1;}}
   timeOfDay+=dt/NIGHT_CYCLE;if(timeOfDay>=1)timeOfDay-=1;
   for(const t of territories)for(const b of t.bots)b.update(dt);
   if(bossBot?.alive)bossBot.update(dt);
@@ -1204,9 +1171,6 @@ function tick(dt){
     bossBot=new Bot(bx,by,'as','enemy',null,true);
     snd('nuke');shakeAmt=18;
   }}
-  // Airdrop
-  airdropTimer-=dt;if(airdropTimer<=0){airdropTimer=AIRDROP_INTERVAL;spawnAirdrop();}
-  for(const a of airdrops){a.timer-=dt;if(a.timer<=0)a.alive=false;}
   // Enemy automatic airstrikes
   tickEnemyStrikes(dt);
   // Bullets
@@ -1237,7 +1201,7 @@ function tick(dt){
       }
     }
   }
-  checkAirdrops();updateTripmines(dt);
+  updateTripmines(dt);
   checkCapture();
   bullets=bullets.filter(b=>b.alive);
   for(const p of particles){p.x+=p.vx;p.y+=p.vy;p.vx*=.87;p.vy*=.87;p.life-=p.txt?.022:.028;}
@@ -1260,7 +1224,7 @@ function render_(dt=0){
   if(lightningFlash>0.05){ctx.fillStyle=`rgba(235,235,255,${lightningFlash*.32})`;ctx.fillRect(0,0,canvas.width,canvas.height);}
   for(const t of territories)for(const b of t.bots)b.draw();
   if(bossBot?.alive)bossBot.draw();
-  drawAirdrops();drawTripmines();
+  drawTripmines();
   for(const b of bullets)b.draw();
   for(const p of particles){
     if(p.txt){const al=Math.min(1,p.life*3);ctx.save();ctx.globalAlpha=al;ctx.font='bold 12px Share Tech Mono,monospace';
