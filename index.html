@@ -173,64 +173,80 @@ function resize(){canvas.width=innerWidth;canvas.height=innerHeight;}
 resize();addEventListener('resize',resize);
 
 // ── Constants ──────────────────────────────────
-const WW=5400,WH=3800,P_RAD=14,B_RAD=12,BUL_RAD=4;
-const P_SPD_BASE=3.4,B_SPD=9.6,BOT_SPD=1.5,BOT_FAST=2.2;
-const SHIELD_DUR=3800,SHIELD_CD=14000;
-const P_HP=100,BOT_HP=45,BOSS_HP=360;
-const SHOOT_RNG=230,DETECT_RNG=280,MELEE_RNG=48;
-const MELEE_DMG=13,LOC_BONUS=120;
-const REINFORCE_INTERVAL=60000;
-const BOSS_SPAWN_TIME=90000;
-const NIGHT_CYCLE=300000;
+// World dimensions and entity sizes
+const WW=5400,WH=3800,P_RAD=14,B_RAD=12,BUL_RAD=4; // World width/height, Player radius, Bot radius, Bullet radius
+// Movement speeds (pixels per frame)
+const P_SPD_BASE=3.4,B_SPD=9.6,BOT_SPD=1.5,BOT_FAST=2.2; // Player speed, Bullet speed, Bot normal speed, Bot fast speed
+// Shield mechanics (milliseconds)
+const SHIELD_DUR=3800,SHIELD_CD=14000; // Shield duration, Shield cooldown
+// Health points
+const P_HP=100,BOT_HP=45,BOSS_HP=360; // Player health, Bot health, Boss health
+// Combat ranges (pixels)
+const SHOOT_RNG=230,DETECT_RNG=280,MELEE_RNG=48; // Shooting range, Detection range, Melee range
+// Damage and bonuses
+const MELEE_DMG=13,LOC_BONUS=120; // Melee damage, Location of interest bonus
+// Timers (milliseconds)
+const REINFORCE_INTERVAL=60000; // How often reinforcements arrive
+const BOSS_SPAWN_TIME=90000; // When boss spawns after game start
+const NIGHT_CYCLE=300000; // Day/night cycle duration
+// Experience points (not used in current version)
 const XP_PER_KILL=25,XP_PER_ZONE=200,XP_PER_BOSS=500;
-// Enemy airstrike: fires every 35-65s
-const ENEMY_STRIKE_MIN=35000,ENEMY_STRIKE_MAX=65000;
-const STRIKE_WARN_TIME=4500; // ms warning before impact
-const STRIKE_RADIUS=260;  // much larger blast radius
-const NUKE_STRIKE_RADIUS=800; // player nuke radius
+// Enemy airstrike system
+const ENEMY_STRIKE_MIN=35000,ENEMY_STRIKE_MAX=65000; // Random interval between enemy strikes (35-65 seconds)
+const STRIKE_WARN_TIME=4500; // Warning time before missile impact (4.5 seconds)
+const STRIKE_RADIUS=260; // Blast radius of enemy missiles
+const NUKE_STRIKE_RADIUS=800; // Blast radius of player nuke ability
 
 // ── Weapon definitions ─────────────────────────
+// Player weapons with damage, rate of fire (ms between shots), range, accuracy spread, pellets per shot, and unlock level
 const WEAPONS=[
-  {name:'AK-47',  dmg:22, rof:190,range:230,spread:.055,bullets:1,unlockLv:1},
-  {name:'SNIPER', dmg:90, rof:1600,range:600,spread:.007,bullets:1,unlockLv:3},
-  {name:'SHOTGUN',dmg:18, rof:580,range:130,spread:.28, bullets:5,unlockLv:5},
+  {name:'AK-47',  dmg:22, rof:190,range:230,spread:.055,bullets:1,unlockLv:1}, // Balanced assault rifle
+  {name:'SNIPER', dmg:90, rof:1600,range:600,spread:.007,bullets:1,unlockLv:3}, // High damage, long range, slow fire rate
+  {name:'SHOTGUN',dmg:18, rof:580,range:130,spread:.28, bullets:5,unlockLv:5}, // Close range, multiple pellets
 ];
 
+// Player upgrade system (not fully implemented in current version)
 const UPGRADES=[
-  {id:'damage',name:'DAMAGE BOOST',desc:'+25% dmg/tier', tiers:3,costs:[30,65,110]},
-  {id:'speed', name:'SPEED BOOST', desc:'+10% spd/tier', tiers:3,costs:[25,55,90]},
-  {id:'armor', name:'ARMOR PLATE', desc:'+30 HP/tier',   tiers:2,costs:[55,100]},
+  {id:'damage',name:'DAMAGE BOOST',desc:'+25% dmg/tier', tiers:3,costs:[30,65,110]}, // Increase weapon damage
+  {id:'speed', name:'SPEED BOOST', desc:'+10% spd/tier', tiers:3,costs:[25,55,90]}, // Increase movement speed  
+  {id:'armor', name:'ARMOR PLATE', desc:'+30 HP/tier',   tiers:2,costs:[55,100]}, // Increase max health
 ];
 
 // ── Soldier Types ──────────────────────────────
+// Different bot classes with stat multipliers: health, speed, range, damage, cooldown, size, and tint color
 const SOLDIER_TYPES={
-  grunt:    {hpMul:1.0, spdMul:1.0, rngMul:1.0, dmgMul:1.0, cdMul:1.0,  sizeMul:1.0, tintCol:null},
-  heavy:    {hpMul:2.4, spdMul:0.65,rngMul:0.7, dmgMul:1.5, cdMul:0.75, sizeMul:1.5, tintCol:'#aa6600'},
-  sniper:   {hpMul:0.6, spdMul:1.1, rngMul:2.4, dmgMul:2.8, cdMul:2.8,  sizeMul:0.8, tintCol:'#006644'},
-  elite:    {hpMul:1.6, spdMul:1.35,rngMul:1.2, dmgMul:1.4, cdMul:0.6,  sizeMul:1.0, tintCol:'#ffcc00'},
-  grenadier:{hpMul:1.3, spdMul:0.9, rngMul:1.0, dmgMul:1.0, cdMul:2.0,  sizeMul:1.1, tintCol:'#ff6600'},
+  grunt:    {hpMul:1.0, spdMul:1.0, rngMul:1.0, dmgMul:1.0, cdMul:1.0,  sizeMul:1.0, tintCol:null}, // Basic soldier, balanced stats
+  heavy:    {hpMul:2.4, spdMul:0.65,rngMul:0.7, dmgMul:1.5, cdMul:0.75, sizeMul:1.5, tintCol:'#aa6600'}, // Tank: high health, slow, close range
+  sniper:   {hpMul:0.6, spdMul:1.1, rngMul:2.4, dmgMul:2.8, cdMul:2.8,  sizeMul:0.8, tintCol:'#006644'}, // Glass cannon: low health, long range, high damage
+  elite:    {hpMul:1.6, spdMul:1.35,rngMul:1.2, dmgMul:1.4, cdMul:0.6,  sizeMul:1.0, tintCol:'#ffcc00'}, // All-rounder: good stats, fast firing
+  grenadier:{hpMul:1.3, spdMul:0.9, rngMul:1.0, dmgMul:1.0, cdMul:2.0,  sizeMul:1.1, tintCol:'#ff6600'}, // Area damage: throws grenades
 };
+// Soldier pool for each continent - determines which soldier types each continent can spawn
+// Each continent has 5 soldiers in their pool, allowing variety in enemy forces
 const SOLDIER_POOL={
-  na:['grunt','grunt','sniper','elite','grenadier'],
-  sa:['grunt','grunt','grunt','heavy','grenadier'],
-  eu:['grunt','sniper','sniper','elite','elite'],
-  af:['grunt','grunt','heavy','heavy','grenadier'],
-  as:['grunt','elite','sniper','grenadier','elite'],
-  au:['grunt','grunt','grunt','heavy','sniper'],
-  an:['heavy','heavy','sniper','elite','grenadier'],
+  na:['grunt','grunt','sniper','elite','grenadier'], // North America: balanced with snipers
+  sa:['grunt','grunt','grunt','heavy','grenadier'], // South America: heavy focus
+  eu:['grunt','sniper','sniper','elite','elite'], // Europe: elite and sniper focused
+  af:['grunt','grunt','heavy','heavy','grenadier'], // Africa: heavy and grenadier focus
+  as:['grunt','elite','sniper','grenadier','elite'], // Asia: mixed elite forces
+  au:['grunt','grunt','grunt','heavy','sniper'], // Australia: basic with some specialists
+  an:['heavy','heavy','sniper','elite','grenadier'], // Antarctica: elite heavy forces
 };
+// Helper function to get random soldier type from a continent's pool
 function getSoldierType(country){
   const pool=SOLDIER_POOL[country]||['grunt','grunt','grunt','heavy','sniper'];
   return pool[Math.floor(Math.random()*pool.length)];
 }
+
+// Continent data: names, flags, colors for UI and rendering
 const CD={
-  na:{name:'N.AMERICA', flag:'🌎',col:'#1a0000',acc:'#ff3333',lit:'#200404'},
-  sa:{name:'S.AMERICA', flag:'🌎',col:'#000511',acc:'#3366ff',lit:'#01061a'},
-  eu:{name:'EUROPE',    flag:'🌍',col:'#051505',acc:'#44ff44',lit:'#081808'},
-  af:{name:'AFRICA',    flag:'🌍',col:'#151500',acc:'#ffff44',lit:'#191900'},
-  as:{name:'ASIA',      flag:'🌏',col:'#150015',acc:'#ff66ff',lit:'#1a001a'},
-  au:{name:'AUSTRALIA', flag:'🌏',col:'#1a0800',acc:'#ff6600',lit:'#1e0a00'},
-  an:{name:'ANTARCTICA',flag:'❄️', col:'#051525',acc:'#66ccff',lit:'#07182e'},
+  na:{name:'N.AMERICA', flag:'🌎',col:'#1a0000',acc:'#ff3333',lit:'#200404'}, // Red theme
+  sa:{name:'S.AMERICA', flag:'🌎',col:'#000511',acc:'#3366ff',lit:'#01061a'}, // Blue theme
+  eu:{name:'EUROPE',    flag:'🌍',col:'#051505',acc:'#44ff44',lit:'#081808'}, // Green theme
+  af:{name:'AFRICA',    flag:'🌍',col:'#151500',acc:'#ffff44',lit:'#191900'}, // Yellow theme
+  as:{name:'ASIA',      flag:'🌏',col:'#150015',acc:'#ff66ff',lit:'#1a001a'}, // Purple theme
+  au:{name:'AUSTRALIA', flag:'🌏',col:'#1a0800',acc:'#ff6600',lit:'#1e0a00'}, // Orange theme
+  an:{name:'ANTARCTICA',flag:'❄️', col:'#051525',acc:'#66ccff',lit:'#07182e'}, // Cyan theme
 };
 
 // ── Geometric continent shapes ──────────────────────────────
@@ -264,31 +280,39 @@ const SHAPES={
 };
 
 // ── Build territories (7 continents only) ──────
+// Create territory objects for each continent with their geometric shapes
 let territories=[];
 for(const [id,pts] of Object.entries(SHAPES)){
   territories.push({id:id+'_h',name:CD[id].name,country:id,pts,bots:[],isHome:true,captureAnim:0,captureOldCol:null});
 }
 
 // ── Enemy airstrike state ──────────────────────
-let enemyStrikes=[];   // {x,y,radius,warnLeft,hit,hitAge,srcCountry}
-let enemyStrikeTimer=ENEMY_STRIKE_MIN+Math.random()*(ENEMY_STRIKE_MAX-ENEMY_STRIKE_MIN);
+let enemyStrikes=[];   // Array of incoming enemy missiles with position, timer, and source
+let enemyStrikeTimer=ENEMY_STRIKE_MIN+Math.random()*(ENEMY_STRIKE_MAX-ENEMY_STRIKE_MIN); // Random timer for next strike
 
-// ── State ──────────────────────────────────────
-let gState='menu',player=null;
-let bullets=[],particles=[],explosions=[],tripmines=[];
-let camera={x:0,y:0},keys={},mouse={x:0,y:0},mw={x:0,y:0};
-let lastT=0,curZone='',reinTimer=0,bossSpawnTimer=BOSS_SPAWN_TIME;
-const _tt={};
-let bossBot=null,bossDefeated=false;
-let killStreak=0,totalKills=0;
-let shakeAmt=0,shakeX=0,shakeY=0;
-let timeOfDay=0.05,rainDrops=[];
-let weatherState='clear',weatherTimer=55000,windX=0,lightningFlash=0,lightningTimer=0;
-let dailyChallenges=[],challengeDone=[false,false,false];
+// ── Global Game State ──────────────────────────────
+let gState='menu',player=null; // Current game state (menu/playing/ended) and player object
+// Game entities and effects
+let bullets=[],particles=[],explosions=[],tripmines=[]; // Arrays for active game objects
+// Camera and input systems
+let camera={x:0,y:0},keys={},mouse={x:0,y:0},mw={x:0,y:0}; // Camera position, keyboard state, mouse position
+// Game timers and counters
+let lastT=0,curZone='',reinTimer=0,bossSpawnTimer=BOSS_SPAWN_TIME; // Last frame time, current zone, reinforcement timer, boss spawn timer
+const _tt={}; // Toast timer storage for UI notifications
+// Boss and combat tracking
+let bossBot=null,bossDefeated=false; // Boss enemy object and defeat status
+let killStreak=0,totalKills=0; // Current kill streak and total kills for player abilities
+let shakeAmt=0,shakeX=0,shakeY=0; // Screen shake system for explosions and impacts
+let timeOfDay=0.05,rainDrops=[]; // Day/night cycle and rain particle system
+let weatherState='clear',weatherTimer=55000,windX=0,lightningFlash=0,lightningTimer=0; // Weather system with timers
+let dailyChallenges=[],challengeDone=[false,false,false]; // Daily challenge system (3 challenges per day)
+// Player statistics tracking
 const stats={kills:0,zonesCapt:0,dollarsTotal:0,crits:0,shotsFired:0,shotsHit:0,dmgDealt:0,dmgTaken:0,surviveTime:0,xpEarned:0,level:1};
 
-// ── Seeded RNG ─────────────────────────────────
+// ── Seeded RNG for Daily Challenges ─────────────────────
+// Creates deterministic random numbers based on date for consistent daily challenges
 function seededRng(s){s=s|0;return()=>{s=(s*16807)%2147483647;return(s-1)/2147483646;};}
+// Pool of possible daily challenges
 const CHALLENGE_POOL=[
   {desc:'Eliminate 10 enemies',goal:10,stat:'kills'},
   {desc:'Eliminate 25 enemies',goal:25,stat:'kills'},
@@ -299,6 +323,7 @@ const CHALLENGE_POOL=[
   {desc:'Land 5 critical hits',goal:5, stat:'crits'},
   {desc:'Reach Level 3',       goal:3, stat:'level'},
 ];
+// Generate 3 random daily challenges based on current date
 function getDailyChallenges(){
   const day=Math.floor(Date.now()/86400000);const rng=seededRng(day*31337);
   const arr=[...CHALLENGE_POOL];for(let i=arr.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]];}
@@ -1133,34 +1158,44 @@ function startGame(){
   requestAnimationFrame(loop);
 }
 
-// ── Main loop ──────────────────────────────────
+// ── Main Game Loop ──────────────────────────────
+// Core game loop that runs every frame using requestAnimationFrame
 function loop(ts){
-  const dt=ts-lastT;lastT=ts;
-  if(gState==='playing')tick(dt);
-  if(gState==='playing'||gState==='ending')render_(dt);
-  if(gState==='playing'||gState==='ending')requestAnimationFrame(loop);
+  const dt=ts-lastT;lastT=ts; // Calculate delta time since last frame
+  if(gState==='playing')tick(dt); // Update game logic only when playing
+  if(gState==='playing'||gState==='ending')render_(dt); // Render game when playing or ending
+  if(gState==='playing'||gState==='ending')requestAnimationFrame(loop); // Continue loop if game is active
 }
 
+// ── Game Logic Update (Tick) ──────────────────────
+// Updates all game systems every frame
 function tick(dt){
-  if(!player?.alive){endGame();return;}
-  stats.surviveTime+=dt/1000;
-  mw.x=mouse.x+camera.x;mw.y=mouse.y+camera.y;
-  player.update(dt);
+  if(!player?.alive){endGame();return;} // End game if player is dead
+  stats.surviveTime+=dt/1000; // Track survival time
+  mw.x=mouse.x+camera.x;mw.y=mouse.y+camera.y; // Update mouse world coordinates
+  player.update(dt); // Update player logic
+  
+  // Smooth camera follow player (10% lerp)
   camera.x+=(player.x-canvas.width/2-camera.x)*.1;
   camera.y+=(player.y-canvas.height/2-camera.y)*.1;
+  // Keep camera within world bounds
   camera.x=Math.max(0,Math.min(WW-canvas.width,camera.x));
   camera.y=Math.max(0,Math.min(WH-canvas.height,camera.y));
+  
+  // Screen shake decay and random offset
   shakeAmt*=.83;shakeX=(Math.random()-.5)*shakeAmt*2;shakeY=(Math.random()-.5)*shakeAmt*2;
   if(shakeAmt<.1){shakeAmt=0;shakeX=0;shakeY=0;}
+  
+  // Weather system updates
   weatherTimer-=dt;
   if(weatherTimer<=0){
-    const ws=['clear','rain','fog','storm','clear','clear'];
+    const ws=['clear','rain','fog','storm','clear','clear']; // Weather types (weighted towards clear)
     weatherState=ws[Math.floor(Math.random()*ws.length)];
-    weatherTimer=45000+Math.random()*55000;
-    windX=weatherState==='storm'?(Math.random()-.5)*4:0;
+    weatherTimer=45000+Math.random()*55000; // 45-100 seconds between weather changes
+    windX=weatherState==='storm'?(Math.random()-.5)*4:0; // Wind only during storms
   }
-  if(weatherState==='rain'||weatherState==='storm')updateRain(dt);
-  lightningFlash*=.88;
+  if(weatherState==='rain'||weatherState==='storm')updateRain(dt); // Update rain particles
+  lightningFlash*=.88; // Lightning flash decay
   if(weatherState==='storm'){lightningTimer-=dt;if(lightningTimer<=0){lightningTimer=3000+Math.random()*8000;lightningFlash=1;}}
   timeOfDay+=dt/NIGHT_CYCLE;if(timeOfDay>=1)timeOfDay-=1;
   for(const t of territories)for(const b of t.bots)b.update(dt);
@@ -1208,7 +1243,6 @@ function tick(dt){
   particles=particles.filter(p=>p.life>0);
   reinTimer-=dt;if(reinTimer<=0){reinTimer=REINFORCE_INTERVAL;doReinforcements();}
   updateHUD();
-  if(player&&territories.filter(t=>t.country===player.country).length===territories.length){endGame('victory');}
 }
 
 function render_(dt=0){
