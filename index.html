@@ -180,14 +180,15 @@ const P_SPD_BASE=3.4,B_SPD=9.6,BOT_SPD=1.5,BOT_FAST=2.2; // Player speed, Bullet
 // Shield mechanics (milliseconds)
 const SHIELD_DUR=3800,SHIELD_CD=14000; // Shield duration, Shield cooldown
 // Health points
-const P_HP=100,BOT_HP=45,BOSS_HP=360; // Player health, Bot health, Boss health
+const P_HP=100,BOT_HP=45,BOSS_HP=600; // Player health, Bot health, Boss health (tank!)
+// Boss blast settings
+const BOSS_BLAST_RADIUS=110,BOSS_BLAST_DMG=52,BOSS_BLAST_CD=2600,BOSS_BLAST_SPEED=7.8; // Blast radius, damage, cooldown, speed
 // Combat ranges (pixels)
 const SHOOT_RNG=230,DETECT_RNG=280,MELEE_RNG=48; // Shooting range, Detection range, Melee range
 // Damage and bonuses
 const MELEE_DMG=13,LOC_BONUS=120; // Melee damage, Location of interest bonus
 // Timers (milliseconds)
 const REINFORCE_INTERVAL=60000; // How often reinforcements arrive
-const BOSS_SPAWN_TIME=90000; // When boss spawns after game start
 const NIGHT_CYCLE=300000; // Day/night cycle duration
 // Experience points (not used in current version)
 const XP_PER_KILL=25,XP_PER_ZONE=200,XP_PER_BOSS=500;
@@ -283,7 +284,7 @@ const SHAPES={
 // Create territory objects for each continent with their geometric shapes
 let territories=[];
 for(const [id,pts] of Object.entries(SHAPES)){
-  territories.push({id:id+'_h',name:CD[id].name,country:id,pts,bots:[],isHome:true,captureAnim:0,captureOldCol:null});
+  territories.push({id:id+'_h',name:CD[id].name,country:id,pts,bots:[],isHome:true,captureAnim:0,captureOldCol:null,bossSpawned:false});
 }
 
 // ── Enemy airstrike state ──────────────────────
@@ -297,10 +298,10 @@ let bullets=[],particles=[],explosions=[],tripmines=[]; // Arrays for active gam
 // Camera and input systems
 let camera={x:0,y:0},keys={},mouse={x:0,y:0},mw={x:0,y:0}; // Camera position, keyboard state, mouse position
 // Game timers and counters
-let lastT=0,curZone='',reinTimer=0,bossSpawnTimer=BOSS_SPAWN_TIME; // Last frame time, current zone, reinforcement timer, boss spawn timer
+let lastT=0,curZone='',reinTimer=0; // Last frame time, current zone, reinforcement timer
 const _tt={}; // Toast timer storage for UI notifications
-// Boss and combat tracking
-let bossBot=null,bossDefeated=false; // Boss enemy object and defeat status
+// Boss system — per-territory bosses, one per country when near defeat
+let bossBots=[]; // Active territory bosses
 let killStreak=0,totalKills=0; // Current kill streak and total kills for player abilities
 let shakeAmt=0,shakeX=0,shakeY=0; // Screen shake system for explosions and impacts
 let timeOfDay=0.05,rainDrops=[]; // Day/night cycle and rain particle system
@@ -412,6 +413,27 @@ function spark(x,y,col,n=6,sp=3.5){
 }
 function floatText(x,y,txt,col='#ffff44'){
   particles.push({x,y,vx:0,vy:-1.1,life:1,col,sz:0,txt});}
+
+// ── Boss blast area explosion ─────────────────────
+function bossBlastExplode(x,y,radius,col){
+  explosions.push({x,y,r:0,maxR:radius,life:1,col});
+  spark(x,y,col,20,6);spark(x,y,'#ffffff',8,4);
+  shakeAmt=Math.max(shakeAmt,12);snd('explosion');
+  // Damage player
+  if(player?.alive&&!player.shOn){
+    const d=Math.hypot(player.x-x,player.y-y);
+    if(d<radius){const dmg=BOSS_BLAST_DMG*(1-d/radius);player.hp-=dmg;stats.dmgTaken+=dmg;snd('hit');shakeAmt=Math.max(shakeAmt,14);spark(player.x,player.y,'#ff4444',8);}
+  }else if(player?.alive&&player.shOn){
+    const d=Math.hypot(player.x-x,player.y-y);
+    if(d<radius){spark(player.x,player.y,'#88aaff',5);}
+  }
+  // Damage friendly bots in radius
+  for(const t of territories)for(const bot of t.bots){
+    if(!bot.alive||bot.team!=='player')continue;
+    const d=Math.hypot(bot.x-x,bot.y-y);
+    if(d<radius){bot.hit(BOSS_BLAST_DMG*(1-d/radius));}
+  }
+}
 
 
 // ── Enemy Automatic Airstrikes ─────────────────
@@ -637,18 +659,43 @@ function showToast(id,msg,dur=1800){
 // ── Bullet class ───────────────────────────────
 class Bullet{
   constructor(x,y,vx,vy,team,color=null){this.x=x;this.y=y;this.vx=vx;this.vy=vy;this.team=team;
-    this.alive=true;this.trail=[];this.dmg=22;this.crit=false;this.range=230;this.dist=0;this.color=color;}
+    this.alive=true;this.trail=[];this.dmg=22;this.crit=false;this.range=230;this.dist=0;this.color=color;
+    this.isBlast=false;this.blastRadius=BOSS_BLAST_RADIUS;this.blastCol=null;this.rad=BUL_RAD;}
   update(){
     this.trail.push({x:this.x,y:this.y});if(this.trail.length>6)this.trail.shift();
     if(weatherState==='storm')this.vx+=windX*.04;
     this.x+=this.vx;this.y+=this.vy;
     this.dist+=Math.hypot(this.vx,this.vy);
-    if(this.x<0||this.x>WW||this.y<0||this.y>WH||this.dist>this.range*2.1)this.alive=false;
+    if(this.x<0||this.x>WW||this.y<0||this.y>WH||this.dist>this.range*2.1){
+      if(this.isBlast&&this.alive){bossBlastExplode(this.x,this.y,this.blastRadius,this.blastCol||'#ff6600');}
+      this.alive=false;
+    }
   }
   draw(){
     if(!this.alive)return;
     const cx=this.x-camera.x+shakeX,cy=this.y-camera.y+shakeY;
     ctx.save();
+    if(this.isBlast){
+      // Blast projectile: big pulsing orb in country color
+      const pulse=0.7+0.3*Math.sin(Date.now()/80);
+      const sc=this.blastCol||'#ff6600';
+      // Trail
+      for(let i=0;i<this.trail.length;i++){
+        const a=(i/this.trail.length)*.5*pulse;
+        ctx.beginPath();ctx.arc(this.trail[i].x-camera.x+shakeX,this.trail[i].y-camera.y+shakeY,BUL_RAD*1.8*(i/this.trail.length),0,Math.PI*2);
+        ctx.fillStyle=sc+Math.floor(a*255).toString(16).padStart(2,'0');ctx.fill();
+      }
+      // Outer glow
+      ctx.beginPath();ctx.arc(cx,cy,BUL_RAD*2.8,0,Math.PI*2);
+      ctx.fillStyle=sc+'33';ctx.fill();
+      // Core
+      ctx.beginPath();ctx.arc(cx,cy,BUL_RAD*2,0,Math.PI*2);
+      ctx.shadowBlur=20;ctx.shadowColor=sc;ctx.fillStyle=sc;ctx.fill();
+      // Inner bright core
+      ctx.beginPath();ctx.arc(cx,cy,BUL_RAD*.9,0,Math.PI*2);
+      ctx.fillStyle='#ffffff';ctx.fill();
+      ctx.shadowBlur=0;ctx.restore();return;
+    }
     const sc=this.color||(this.team==='player'?(this.crit?'#ffff00':'#ffcc00'):this.team==='friendly'?'#55ff55':'#ff3300');
     const fc=this.color||(this.team==='player'?(this.crit?'#ffff55':'#ffdd44'):this.team==='friendly'?'#88ff88':'#ff5533');
     for(let i=0;i<this.trail.length;i++){
@@ -668,14 +715,14 @@ class Bot{
     this.x=x;this.y=y;this.country=country;this.team=team;this.terr=terr;this.isBoss=isBoss;
     this.soldierType=soldierType||'grunt';
     const st=SOLDIER_TYPES[this.soldierType]||SOLDIER_TYPES.grunt;
-    const hm=isBoss?8:st.hpMul,rm=isBoss?2.2:st.sizeMul;
+    const hm=isBoss?13:st.hpMul,rm=isBoss?2.8:st.sizeMul;
     this.hp=BOT_HP*hm;this.maxHp=this.hp;this.alive=true;this.rad=B_RAD*rm;
     this.angle=Math.random()*Math.PI*2;this.state=Math.random()<.5?'patrol':'guard';
     this.px=0;this.py=0;this.pt=0;this.shootT=0;
-    this.shootCD=(isBoss?700:1200*st.cdMul)+Math.random()*800;
-    this.meleeT=0;this.chaseT=0;this.shootDmg=(isBoss?35:22)*st.dmgMul;
-    this.shootRange=SHOOT_RNG*st.rngMul;
-    this.moveSpd=BOT_SPD*st.spdMul;this.moveFast=BOT_FAST*st.spdMul;
+    this.shootCD=(isBoss?BOSS_BLAST_CD:1200*st.cdMul)+Math.random()*400;
+    this.meleeT=0;this.chaseT=0;this.shootDmg=(isBoss?BOSS_BLAST_DMG:22)*st.dmgMul;
+    this.shootRange=isBoss?340:SHOOT_RNG*st.rngMul;
+    this.moveSpd=isBoss?0.55:BOT_SPD*st.spdMul;this.moveFast=isBoss?0.85:BOT_FAST*st.spdMul;
     // Formation system - professional army formation
     this.formationOffset={
       // Position in formation circle (0-360 degrees)
@@ -694,9 +741,9 @@ class Bot{
     };
     this.targetEnemy = null;
     this.combatState = 'follow'; // 'follow', 'engage', 'return'
-    // Soldier colors match their continent
-    this.col=isBoss?'#cc0000':(CD[country]?.acc||'#888888');
-    this.bcol=isBoss?'#550000':(CD[country]?.col||'#333333');
+    // Soldier/boss colors match their continent
+    this.col=CD[country]?.acc||'#888888';
+    this.bcol=CD[country]?.col||'#333333';
   }
   update(dt){
     if(!this.alive)return;
@@ -867,24 +914,54 @@ class Bot{
     this.y=Math.max(this.rad,Math.min(WH-this.rad,this.y));
   }
   _pursue(tx,ty,dist,target,meleeOnly){
-    const ang=Math.atan2(ty-this.y,tx-this.x);this.angle=ang;
-    const spd=(dist<this.shootRange?this.moveSpd*.6:this.moveFast*(this.isBoss?.5:1));
+    const ang=Math.atan2(ty-this.y,tx-this.x);
+    if(this.isBoss){
+      // Smooth turret rotation — tanks can't snap direction instantly
+      if(this._targetAngle===undefined)this._targetAngle=this.angle;
+      this._targetAngle=ang;
+      // Lerp angle at a capped turn rate (~1.8 deg/frame)
+      let da=this._targetAngle-this.angle;
+      while(da>Math.PI)da-=Math.PI*2;while(da<-Math.PI)da+=Math.PI*2;
+      const turnRate=0.032;
+      this.angle+=Math.max(-turnRate,Math.min(turnRate,da));
+    }else{
+      this.angle=ang;
+    }
+    const spd=(dist<this.shootRange?this.moveSpd*.6:this.moveFast);
     if(dist>this.rad+MELEE_RNG+8){this.x+=Math.cos(ang)*spd;this.y+=Math.sin(ang)*spd;}
-    if(meleeOnly||this.isBoss){
+    if(meleeOnly){
       if(dist<this.rad+MELEE_RNG&&this.meleeT<=0){
-        this.meleeT=this.isBoss?1100:750;
+        this.meleeT=750;
         if(!target.shOn){
-          const dmg=this.isBoss?30:MELEE_DMG;target.hp-=dmg;stats.dmgTaken+=dmg;
+          const dmg=MELEE_DMG;target.hp-=dmg;stats.dmgTaken+=dmg;
           spark(target.x,target.y,'#ff4444',5);snd('hit');shakeAmt=Math.max(shakeAmt,6);
         }
       }
+    }else if(this.isBoss){
+      // Boss: melee swipe
+      if(dist<this.rad+MELEE_RNG&&this.meleeT<=0){
+        this.meleeT=1400;
+        if(!target.shOn){target.hp-=38;stats.dmgTaken+=38;spark(target.x,target.y,'#ff4444',7);snd('hit');shakeAmt=Math.max(shakeAmt,10);}
+      }
+      // Boss: fire one explosive blast (slow, big damage radius)
+      if(dist<this.shootRange&&this.shootT<=0){
+        this.shootT=this.shootCD;
+        const a=ang+(Math.random()-.5)*0.06;
+        const bul=new Bullet(this.x+Math.cos(a)*(this.rad+6),this.y+Math.sin(a)*(this.rad+6),
+          Math.cos(a)*BOSS_BLAST_SPEED,Math.sin(a)*BOSS_BLAST_SPEED,'enemy',this.col);
+        bul.dmg=this.shootDmg;bul.range=this.shootRange*1.6;
+        bul.isBlast=true;bul.blastRadius=BOSS_BLAST_RADIUS;bul.blastCol=this.col;
+        bullets.push(bul);
+        shakeAmt=Math.max(shakeAmt,5);
+        snd('explosion');
+      }
     }else{
-      if(dist<this.shootRange*(this.isBoss?1.4:1)&&this.shootT<=0){
+      if(dist<this.shootRange&&this.shootT<=0){
         this.shootT=this.shootCD;const a=ang+(Math.random()-.5)*.14;
         const bTeam=this.team==='player'?'friendly':'enemy';
         const bul=new Bullet(this.x+Math.cos(a)*(this.rad+5),this.y+Math.sin(a)*(this.rad+5),
           Math.cos(a)*B_SPD*.78,Math.sin(a)*B_SPD*.78,bTeam,CD[this.country]?.acc||null);
-        bul.dmg=this.shootDmg;bul.range=this.isBoss?400:this.shootRange;bullets.push(bul);
+        bul.dmg=this.shootDmg;bul.range=this.shootRange;bullets.push(bul);
         // Grenadier: lob a grenade
         if(this.soldierType==='grenadier'&&Math.random()<0.35&&dist<this.shootRange){
           setTimeout(()=>{
@@ -901,7 +978,15 @@ class Bot{
     if(this.state==='guard'){this.angle+=.008;return;}
     if(this.pt<=0){
       const a=Math.random()*Math.PI*2;this.px=Math.cos(a)*BOT_SPD;this.py=Math.sin(a)*BOT_SPD;
-      this.pt=1600+Math.random()*2200;this.angle=a;if(Math.random()<.15)this.state='guard';
+      this.pt=1600+Math.random()*2200;
+      if(this.isBoss){this._targetAngle=a;}else{this.angle=a;}
+      if(Math.random()<.15)this.state='guard';
+    }
+    // Boss: apply smooth turn even while wandering
+    if(this.isBoss&&this._targetAngle!==undefined){
+      let da=this._targetAngle-this.angle;
+      while(da>Math.PI)da-=Math.PI*2;while(da<-Math.PI)da+=Math.PI*2;
+      const turnRate=0.032;this.angle+=Math.max(-turnRate,Math.min(turnRate,da));
     }
     const nx=this.x+this.px,ny=this.y+this.py;
     let canMove=false;
@@ -911,9 +996,30 @@ class Bot{
     if(canMove){this.x=nx;this.y=ny;}else this.pt=0;
   }
   hit(dmg){
-    this.hp-=dmg;spark(this.x,this.y,'#ff8844',this.isBoss?7:4);
-    if(this.hp<=0){this.alive=false;spark(this.x,this.y,'#ff5500',this.isBoss?22:12);
-      if(this.isBoss){addXP(XP_PER_BOSS);shakeAmt=25;bossDefeated=true;}
+    this.hp-=dmg;
+    if(this.isBoss){
+      spark(this.x,this.y,this.col,8,5);
+    }else{
+      spark(this.x,this.y,'#ff8844',4);
+    }
+    if(this.hp<=0){this.alive=false;
+      if(this.isBoss){
+        // Massive country-colored death explosion
+        explosions.push({x:this.x,y:this.y,r:0,maxR:220,life:1,col:this.col});
+        explosions.push({x:this.x,y:this.y,r:0,maxR:140,life:1,col:'#ffffff'});
+        spark(this.x,this.y,this.col,50,12);
+        spark(this.x,this.y,'#ffffff',25,8);
+        spark(this.x,this.y,this.col,30,18);
+        shakeAmt=35;lightningFlash=0.6;
+        addXP(XP_PER_BOSS);
+        snd('nuke');
+        // Remove from bossBots array
+        const idx=bossBots.indexOf(this);if(idx>-1)bossBots.splice(idx,1);
+        // Also clear from territory
+        for(const t of territories){if(t.bossRef===this){t.bossRef=null;}}
+      }else{
+        spark(this.x,this.y,'#ff5500',12);
+      }
     }
   }
   draw(){
@@ -921,29 +1027,56 @@ class Bot{
     const sx=this.x-camera.x+shakeX,sy=this.y-camera.y+shakeY;
     if(sx<-60||sx>canvas.width+60||sy<-60||sy>canvas.height+60)return;
     ctx.save();ctx.translate(sx,sy);
-    // No flashlight — removed
+    if(this.isBoss){
+      const now=Date.now();
+      const pulse=.5+.35*Math.sin(now/180);
+      // Rotating chevrons only — no outer ring, no glow fill
+      ctx.rotate(now/1800);
+      for(let i=0;i<4;i++){
+        ctx.save();ctx.rotate(i*Math.PI/2);
+        ctx.beginPath();ctx.moveTo(0,-(this.rad+16));ctx.lineTo(-5,-(this.rad+8));ctx.lineTo(5,-(this.rad+8));ctx.closePath();
+        ctx.fillStyle=`rgba(${hexToRgb(this.col)},${0.55+pulse*0.3})`;ctx.fill();
+        ctx.restore();
+      }
+      ctx.rotate(-now/1800);
+    }
     ctx.rotate(this.angle);
-    if(this.isBoss){ctx.beginPath();ctx.arc(0,0,this.rad+9,0,Math.PI*2);ctx.fillStyle=`rgba(200,0,0,${.08+.05*Math.sin(Date.now()/200)})`;ctx.fill();}
-    ctx.beginPath();ctx.arc(2,2,this.rad,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,.3)';ctx.fill();
-    ctx.beginPath();ctx.arc(0,0,this.rad,0,Math.PI*2);ctx.fillStyle=this.bcol;ctx.fill();
-    ctx.strokeStyle=this.col;ctx.lineWidth=this.isBoss?3:2;ctx.stroke();
-    ctx.beginPath();ctx.arc(0,-2,this.isBoss?9.5:6.5,0,Math.PI*2);ctx.fillStyle=this.col;ctx.fill();
-    if(!this.isBoss){ctx.fillStyle='#555';ctx.fillRect(7,-3.5,18,6);ctx.fillStyle='#333';ctx.fillRect(21,-2.5,5,5);}
-    else{ctx.fillStyle='#880000';ctx.fillRect(14,-5,28,9);ctx.fillStyle='#550000';ctx.fillRect(38,-4,9,7);}
+    // Shadow
+    ctx.beginPath();ctx.arc(2,2,this.rad,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,.4)';ctx.fill();
+    // Body
+    ctx.beginPath();ctx.arc(0,0,this.rad,0,Math.PI*2);
+    ctx.fillStyle=this.bcol;ctx.fill();
+    ctx.strokeStyle=this.col;ctx.lineWidth=this.isBoss?4:2;ctx.stroke();
+    ctx.lineWidth=0; // clear stroke width so barrel rects have no stray stroke
+    // Turret dome
+    ctx.beginPath();ctx.arc(0,-2,this.isBoss?12:6.5,0,Math.PI*2);ctx.fillStyle=this.col;ctx.fill();
+    if(!this.isBoss){
+      // Regular soldier gun
+      ctx.fillStyle='#555';ctx.fillRect(7,-3.5,18,6);ctx.fillStyle='#333';ctx.fillRect(21,-2.5,5,5);
+    }else{
+      // Tank barrel: wide base, then long thin barrel — single shot, no gap
+      ctx.fillStyle=this.col;
+      // Base mount — covers body edge, wide and short
+      ctx.fillRect(8,-6,18,11);
+      // Thin barrel — starts flush with base, narrow
+      ctx.fillRect(26,-2,34,4);
+    }
     ctx.restore();
-    // HP bar
-    const bw=this.rad*2.4+(this.isBoss?30:0);const bx=sx-bw/2,by=sy-this.rad-(this.isBoss?14:9);
-    ctx.fillStyle='#111';ctx.fillRect(bx,by,bw,this.isBoss?7:4);
-    ctx.fillStyle=this.hp/this.maxHp>.5?'#44ee44':(this.hp/this.maxHp>.2?'#eeaa22':'#ee4444');
-    ctx.fillRect(bx,by,bw*(this.hp/this.maxHp),this.isBoss?7:4);
-    if(this.isBoss){ctx.font='bold 9px Share Tech Mono,monospace';ctx.textAlign='center';ctx.fillStyle='#ff2222';ctx.fillText('BOSS',sx,by-4);}
+    // HP bar — fixed width for soldiers (not rad-scaled), slightly bigger for boss
+    const bw=this.isBoss?this.rad*2.8:B_RAD*2.4;
+    const bx=sx-bw/2,by=sy-this.rad-(this.isBoss?12:9);
+    const barH=this.isBoss?6:4;
+    ctx.fillStyle='#111';ctx.fillRect(bx,by,bw,barH);
+    const bhp=this.hp/this.maxHp;
+    const hpCol=this.isBoss?(bhp>.6?this.col:(bhp>.3?'#ffaa22':'#ff3333')):(bhp>.5?'#44ee44':(bhp>.2?'#eeaa22':'#ee4444'));
+    ctx.fillStyle=hpCol;ctx.fillRect(bx,by,bw*bhp,barH);
   }
 }
 
 // ── Player class ───────────────────────────────
 class Player{
   constructor(country,name){
-    this.country=country;this.name=name;
+    this.country=country;this.name=name.toUpperCase();
     const ht=territories.find(t=>t.id===country+'_h');
     const[cx,cy]=polyCenter(ht.pts);this.x=cx;this.y=cy;
     this.hp=P_HP;this.maxHp=P_HP;this.alive=true;this.angle=0;
@@ -1009,7 +1142,7 @@ class Player{
     // Name
     ctx.save();ctx.font='bold 10px Share Tech Mono,monospace';ctx.textAlign='center';
     ctx.shadowColor=this.col;ctx.shadowBlur=6;ctx.fillStyle=this.col;
-    ctx.fillText(this.name,sx,sy-P_RAD-18);ctx.restore();
+    ctx.fillText(this.name.toUpperCase(),sx,sy-P_RAD-18);ctx.restore();
     // HP bar
     const bw=P_RAD*3.4;
     ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(sx-bw/2-1,sy-P_RAD-16,bw+2,6);
@@ -1069,16 +1202,54 @@ function doReinforcements(){
   }
 }
 
+// ── Hex to RGB helper for boss visuals ────────────
+function hexToRgb(hex){
+  const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  return `${r},${g},${b}`;
+}
+
+// ── Boss spawn — triggered when country is nearly defeated ─────────────────
+function checkBossSpawns(){
+  if(!player?.alive)return;
+  for(const t of territories){
+    // Skip player's own territory and already-spawned bosses
+    if(t.country===player.country||t.bossSpawned)continue;
+    const allBots=t.bots;
+    const total=allBots.length;if(total===0)continue;
+    const alive=allBots.filter(b=>b.alive).length;
+    // Trigger boss when ≤28% of soldiers remain
+    if(alive/total<=0.28){
+      t.bossSpawned=true;
+      // Find a spawn point inside the territory
+      const[bx,by]=randomInTerr(t);
+      const boss=new Bot(bx,by,t.country,'enemy',t,true);
+      t.bossRef=boss;
+      bossBots.push(boss);
+      // Dramatic entrance
+      shakeAmt=Math.max(shakeAmt,22);
+      snd('nuke');
+      // Big entry explosion ring in country color
+      explosions.push({x:bx,y:by,r:0,maxR:180,life:1,col:CD[t.country].acc,isBossEntry:true});
+      spark(bx,by,CD[t.country].acc,40,10);
+      spark(bx,by,'#ffffff',18,6);
+    }
+  }
+}
+
 // ── Territory capture ──────────────────────────
 function checkCapture(){
   if(!player?.alive)return;
   for(const t of territories){
     if(t.country===player.country)continue;
+    // Can't capture while boss is still alive
+    if(t.bossRef&&t.bossRef.alive)continue;
     if(t.bots.length>0&&t.bots.filter(b=>b.alive).length===0){
       t.captureOldCol=CD[t.country]?.col||'#0d1308';
       t.captureAnim=1.0;
       const oldCountry=t.country;
-      t.country=player.country; // territory now belongs to player's continent
+      t.country=player.country;
+      t.bossSpawned=false; // Reset so boss can spawn again if territory changes hands
+      t.bossRef=null;
       // Overwrite CD colours for this territory's rendering so it looks like player's land
       // (we use t.country so CD[player.country] is automatically used everywhere already)
       snd('capture');stats.zonesCapt++;addXP(XP_PER_ZONE);
@@ -1183,6 +1354,13 @@ function drawTerr(t,dt){
   ctx.restore();
 }
 
+// ── Helper: convert hex or rgb string to r,g,b values ─────────────────────
+function tryRgb(col){
+  if(!col)return'255,100,0';
+  if(col.startsWith('#')){try{return hexToRgb(col);}catch{return'255,100,0';}}
+  return col;
+}
+
 // ── Draw explosion effects ─────────────────────
 function drawExplosions(){
   for(let i=explosions.length-1;i>=0;i--){
@@ -1194,10 +1372,11 @@ function drawExplosions(){
       ctx.beginPath();ctx.arc(sx,sy,6,0,Math.PI*2);ctx.fillStyle=`rgba(255,50,50,${e.targetLife})`;ctx.fill();
       if(e.targetLife<=0)explosions.splice(i,1);
     }else{
-      e.r=Math.min(e.r+e.maxR*.1,e.maxR);e.life-=.04;
+      e.r=Math.min(e.r+e.maxR*.1,e.maxR);e.life-=e.isBossEntry?.025:.04;
+      const col=e.col||'255,100,0';
       ctx.beginPath();ctx.arc(sx,sy,e.r,0,Math.PI*2);
-      ctx.fillStyle=`rgba(255,100,0,${e.life*.22})`;ctx.fill();
-      ctx.strokeStyle=`rgba(255,150,50,${e.life*.55})`;ctx.lineWidth=2;ctx.stroke();
+      ctx.fillStyle=`rgba(${tryRgb(col)},${e.life*(e.isBossEntry?.1:.22)})`;ctx.fill();
+      ctx.strokeStyle=`rgba(${tryRgb(col)},${e.life*(e.isBossEntry?.8:.55)})`;ctx.lineWidth=e.isBossEntry?4:2;ctx.stroke();
       if(e.life<=0)explosions.splice(i,1);
     }
   }
@@ -1248,8 +1427,14 @@ function drawMinimap(){
       ctx.fillStyle=b.team==='player'?'#44ff88':'#ff4444';ctx.fill();
     }
   }
-  if(bossBot?.alive){ctx.beginPath();ctx.arc(mmX+bossBot.x*scX,mmY+bossBot.y*scY,3.5,0,Math.PI*2);ctx.fillStyle='#ff0000';ctx.fill();}
   if(player){ctx.beginPath();ctx.arc(mmX+player.x*scX,mmY+player.y*scY,3,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();}
+  // Boss dots on minimap — country colored, pulsing
+  for(const boss of bossBots){
+    if(!boss.alive)continue;
+    const pulse=0.7+0.3*Math.sin(Date.now()/300);
+    ctx.beginPath();ctx.arc(mmX+boss.x*scX,mmY+boss.y*scY,4,0,Math.PI*2);
+    ctx.fillStyle='#ff2222';ctx.globalAlpha=pulse;ctx.fill();ctx.globalAlpha=1;
+  }
 }
 
 // ── Draw strike warning circles ────────────────
@@ -1301,7 +1486,7 @@ function chkDeploy(){document.getElementById('dBtn').disabled=!(document.getElem
 
 // ── Start ──────────────────────────────────────
 function startGame(){
-  const name=document.getElementById('nameIn').value.trim();if(!name||!selC)return;
+  const name=document.getElementById('nameIn').value.trim().toUpperCase();if(!name||!selC)return;
   document.getElementById('nameIn').classList.add('permanent-focus');
   document.getElementById('menu').style.display='none';
   document.getElementById('hud').style.display='block';
@@ -1357,13 +1542,10 @@ function tick(dt){
   if(weatherState==='storm'){lightningTimer-=dt;if(lightningTimer<=0){lightningTimer=3000+Math.random()*8000;lightningFlash=1;}}
   timeOfDay+=dt/NIGHT_CYCLE;if(timeOfDay>=1)timeOfDay-=1;
   for(const t of territories)for(const b of t.bots)b.update(dt);
-  if(bossBot?.alive)bossBot.update(dt);
-  // Boss spawn
-  if(!bossBot&&!bossDefeated){bossSpawnTimer-=dt;if(bossSpawnTimer<=0){
-    const bx=300+Math.random()*(WW-600),by=300+Math.random()*(WH-600);
-    bossBot=new Bot(bx,by,'as','enemy',null,true);
-    snd('nuke');shakeAmt=18;
-  }}
+  for(const boss of bossBots){if(boss.alive)boss.update(dt);}
+  // Check if any country is about to be wiped out — deploy their boss
+  checkBossSpawns();
+  checkCapture();
   // Enemy automatic airstrikes
   tickEnemyStrikes(dt);
   // Bullets
@@ -1372,24 +1554,31 @@ function tick(dt){
     if(!b.alive)continue;
     if(b.team==='enemy'){
       // Check collision with player
-      if(player.shOn&&Math.hypot(b.x-player.x,b.y-player.y)<P_RAD+16){b.alive=false;spark(b.x,b.y,'#88aaff',4);}
-      else if(!player.shOn&&Math.hypot(b.x-player.x,b.y-player.y)<P_RAD+BUL_RAD){
-        const dmg=b.dmg||22;player.hp-=dmg;b.alive=false;stats.dmgTaken+=dmg;
-        spark(player.x,player.y,'#ff4444',7);snd('hit');shakeAmt=Math.max(shakeAmt,9);
+      const hitRad=b.isBlast?b.rad*1.6:BUL_RAD;
+      if(player.shOn&&Math.hypot(b.x-player.x,b.y-player.y)<P_RAD+16){
+        b.alive=false;spark(b.x,b.y,'#88aaff',4);
+        if(b.isBlast)bossBlastExplode(b.x,b.y,b.blastRadius||BOSS_BLAST_RADIUS,b.blastCol||'#ff6600');
+      }
+      else if(!player.shOn&&Math.hypot(b.x-player.x,b.y-player.y)<P_RAD+hitRad){
+        if(b.isBlast){b.alive=false;bossBlastExplode(b.x,b.y,b.blastRadius||BOSS_BLAST_RADIUS,b.blastCol||'#ff6600');}
+        else{const dmg=b.dmg||22;player.hp-=dmg;b.alive=false;stats.dmgTaken+=dmg;
+          spark(player.x,player.y,'#ff4444',7);snd('hit');shakeAmt=Math.max(shakeAmt,9);}
       }
       // Check collision with friendly bots
       if(b.alive){
         for(const t of territories)for(const bot of t.bots){
           if(!bot.alive||bot.team!=='player')continue;
-          if(Math.hypot(b.x-bot.x,b.y-bot.y)<bot.rad+BUL_RAD){
-            const dmg=b.dmg||22;bot.hit(dmg);b.alive=false;spark(bot.x,bot.y,'#ff4444',4);snd('hit');
+          const hitR=b.isBlast?b.rad*1.5:BUL_RAD;
+          if(Math.hypot(b.x-bot.x,b.y-bot.y)<bot.rad+hitR){
+            if(b.isBlast){b.alive=false;bossBlastExplode(b.x,b.y,b.blastRadius||BOSS_BLAST_RADIUS,b.blastCol||'#ff6600');}
+            else{const dmg=b.dmg||22;bot.hit(dmg);b.alive=false;spark(bot.x,bot.y,'#ff4444',4);snd('hit');}
             break;
           }
         }
       }
     }
     if(b.team==='player'||b.team==='friendly'){
-      const allBots=[...(bossBot?.alive?[bossBot]:[])];
+      const allBots=[...bossBots.filter(bb=>bb.alive)];
       for(const t of territories)for(const bot of t.bots)allBots.push(bot);
       let hit=false;
       for(const bot of allBots){
@@ -1406,7 +1595,6 @@ function tick(dt){
     }
   }
   updateTripmines(dt);
-  checkCapture();
   bullets=bullets.filter(b=>b.alive);
   for(const p of particles){p.x+=p.vx;p.y+=p.vy;p.vx*=.87;p.vy*=.87;p.life-=p.txt?.022:.028;}
   particles=particles.filter(p=>p.life>0);
@@ -1426,7 +1614,7 @@ function render_(dt=0){
   if(nop>0.04){ctx.fillStyle=`rgba(5,0,20,${nop*.7})`;ctx.fillRect(0,0,canvas.width,canvas.height);}
   if(lightningFlash>0.05){ctx.fillStyle=`rgba(235,235,255,${lightningFlash*.32})`;ctx.fillRect(0,0,canvas.width,canvas.height);}
   for(const t of territories)for(const b of t.bots)b.draw();
-  if(bossBot?.alive)bossBot.draw();
+  for(const boss of bossBots){if(boss.alive)boss.draw();}
   drawTripmines();
   for(const b of bullets)b.draw();
   for(const p of particles){
