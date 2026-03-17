@@ -266,14 +266,14 @@ const SHAPES={
   sa:[ // Inverted Triangle — South America — shifted up
     [670,3050],[240,1850],[1100,1850]
   ],
-  eu:[ // Hexagon — Europe — shifted right closer to Africa/Asia
-    [2620,80],[3060,80],[3300,480],[3060,880],[2620,880],[2380,480]
+  eu:[ // Hexagon — Europe — shifted left to fit Asia in minimap
+    [2320,80],[2760,80],[3000,480],[2760,880],[2320,880],[2080,480]
   ],
-  af:[ // Rectangle — Africa — shorter height, shifted right near Asia
-    [2400,1150],[3500,1150],[3500,2600],[2400,2600]
+  af:[ // Rectangle — Africa — shifted left with other continents
+    [2100,1150],[3200,1150],[3200,2600],[2100,2600]
   ],
-  as:makePentagon(4600,1100,1180,860),
-  au:makeHex(4560,2520,430),
+  as:makePentagon(4300,1100,1180,860),
+  au:makeHex(4260,2520,430),
   an:[ // Rectangle — Antarctica (bottom strip with margin)
     [100,3380],[5300,3380],[5300,3700],[100,3700]
   ]
@@ -1225,11 +1225,17 @@ function drawMinimap(){
       }
       ctx.closePath();ctx.fill();
       ctx.globalAlpha=1;
-      // Border
+      // Border - redraw path for stroke to ensure consistency
+      ctx.beginPath();
+      ctx.moveTo(mmX+t.pts[0][0]*scX, mmY+t.pts[0][1]*scY);
+      for(let i=1;i<t.pts.length;i++){
+        ctx.lineTo(mmX+t.pts[i][0]*scX, mmY+t.pts[i][1]*scY);
+      }
+      ctx.closePath();
       if(player&&t.country===player.country){
         ctx.strokeStyle=CD[player.country].acc;ctx.lineWidth=1.2;ctx.stroke();
       }else{
-        ctx.strokeStyle=CD[t.country]?.acc||'#333';ctx.lineWidth=0.5;ctx.stroke();
+        ctx.strokeStyle=CD[t.country]?.acc||'#333';ctx.lineWidth=1;ctx.stroke();
       }
     }
   }
@@ -1415,7 +1421,7 @@ function render_(dt=0){
   drawStrikeWarnings();
   drawExplosions();
   if(weatherState==='rain'||weatherState==='storm')drawRain(weatherState==='storm'?.28:.18);
-  if(weatherState==='fog'){ctx.fillStyle='rgba(175,195,185,.3)';ctx.fillRect(0,0,canvas.width,canvas.height);}
+  if(weatherState==='fog'){ctx.fillStyle='rgba(175,195,185,.1)';ctx.fillRect(0,0,canvas.width,canvas.height);}
   const nop=getNightOp();
   if(nop>0.04){ctx.fillStyle=`rgba(5,0,20,${nop*.7})`;ctx.fillRect(0,0,canvas.width,canvas.height);}
   if(lightningFlash>0.05){ctx.fillStyle=`rgba(235,235,255,${lightningFlash*.32})`;ctx.fillRect(0,0,canvas.width,canvas.height);}
