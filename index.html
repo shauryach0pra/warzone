@@ -80,7 +80,6 @@ canvas{display:block;cursor:crosshair;}
 .notif-toast{font-family:'Oswald',sans-serif;font-size:12px;letter-spacing:3px;
   padding:4px 18px;border:1px solid;opacity:0;transition:opacity .3s;
   white-space:nowrap;width:100%;text-align:center;}
-#levelToast{color:#ffdd44;border-color:#ffdd44;background:rgba(26,22,0,0.95);font-size:13px;}
 #reinToast{color:#ffaa00;border-color:#ffaa00;background:rgba(26,16,0,0.9);}
 #pickupToast{color:#44ff88;border-color:#44ff88;background:rgba(0,28,10,0.9);}
 
@@ -146,7 +145,6 @@ canvas{display:block;cursor:crosshair;}
 <div id="hud">
   <!-- Notification area only — toasts for game events -->
   <div id="notifArea" style="position:absolute;bottom:60px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none;min-width:280px;">
-    <div class="notif-toast" id="levelToast"></div>
     <div class="notif-toast" id="reinToast"></div>
     <div class="notif-toast" id="pickupToast"></div>
   </div>
@@ -190,8 +188,6 @@ const MELEE_DMG=13,LOC_BONUS=120; // Melee damage, Location of interest bonus
 // Timers (milliseconds)
 const REINFORCE_INTERVAL=60000; // How often reinforcements arrive
 const NIGHT_CYCLE=300000; // Day/night cycle duration
-// Experience points (not used in current version)
-const XP_PER_KILL=25,XP_PER_ZONE=200,XP_PER_BOSS=500;
 // Enemy airstrike system
 const ENEMY_STRIKE_MIN=35000,ENEMY_STRIKE_MAX=65000; // Random interval between enemy strikes (35-65 seconds)
 const STRIKE_WARN_TIME=4500; // Warning time before missile impact (4.5 seconds)
@@ -199,11 +195,11 @@ const STRIKE_RADIUS=260; // Blast radius of enemy missiles
 const NUKE_STRIKE_RADIUS=800; // Blast radius of player nuke ability
 
 // ── Weapon definitions ─────────────────────────
-// Player weapons with damage, rate of fire (ms between shots), range, accuracy spread, pellets per shot, and unlock level
+// Player weapons with damage, rate of fire (ms between shots), range, accuracy spread, pellets per shot
 const WEAPONS=[
-  {name:'AK-47',  dmg:22, rof:190,range:230,spread:.055,bullets:1,unlockLv:1}, // Balanced assault rifle
-  {name:'SNIPER', dmg:90, rof:1600,range:600,spread:.007,bullets:1,unlockLv:3}, // High damage, long range, slow fire rate
-  {name:'SHOTGUN',dmg:18, rof:580,range:130,spread:.28, bullets:5,unlockLv:5}, // Close range, multiple pellets
+  {name:'AK-47',  dmg:22, rof:190,range:230,spread:.055,bullets:1}, // Balanced assault rifle
+  {name:'SNIPER', dmg:90, rof:1000,range:600,spread:.007,bullets:1}, // High damage, long range, fast fire rate
+  {name:'SHOTGUN',dmg:18, rof:580,range:130,spread:.28, bullets:5}, // Close range, multiple pellets
 ];
 
 // Player upgrade system (not fully implemented in current version)
@@ -306,30 +302,9 @@ let killStreak=0,totalKills=0; // Current kill streak and total kills for player
 let shakeAmt=0,shakeX=0,shakeY=0; // Screen shake system for explosions and impacts
 let timeOfDay=0.05,rainDrops=[]; // Day/night cycle and rain particle system
 let weatherState='clear',weatherTimer=55000,windX=0,lightningFlash=0,lightningTimer=0; // Weather system with timers
-let dailyChallenges=[],challengeDone=[false,false,false]; // Daily challenge system (3 challenges per day)
 // Player statistics tracking
-const stats={kills:0,zonesCapt:0,dollarsTotal:0,crits:0,shotsFired:0,shotsHit:0,dmgDealt:0,dmgTaken:0,surviveTime:0,xpEarned:0,level:1};
+const stats={kills:0,zonesCapt:0,dollarsTotal:0,crits:0,shotsFired:0,shotsHit:0,dmgDealt:0,dmgTaken:0,surviveTime:0};
 
-// ── Seeded RNG for Daily Challenges ─────────────────────
-// Creates deterministic random numbers based on date for consistent daily challenges
-function seededRng(s){s=s|0;return()=>{s=(s*16807)%2147483647;return(s-1)/2147483646;};}
-// Pool of possible daily challenges
-const CHALLENGE_POOL=[
-  {desc:'Eliminate 10 enemies',goal:10,stat:'kills'},
-  {desc:'Eliminate 25 enemies',goal:25,stat:'kills'},
-  {desc:'Capture 2 continents',goal:2, stat:'zonesCapt'},
-  {desc:'Capture 4 continents',goal:4, stat:'zonesCapt'},
-  {desc:'Collect $60',         goal:60,stat:'dollarsTotal'},
-  {desc:'Collect $150',        goal:150,stat:'dollarsTotal'},
-  {desc:'Land 5 critical hits',goal:5, stat:'crits'},
-  {desc:'Reach Level 3',       goal:3, stat:'level'},
-];
-// Generate 3 random daily challenges based on current date
-function getDailyChallenges(){
-  const day=Math.floor(Date.now()/86400000);const rng=seededRng(day*31337);
-  const arr=[...CHALLENGE_POOL];for(let i=arr.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]];}
-  return arr.slice(0,3);
-}
 
 // ── Leaderboard ────────────────────────────────
 function getLB(){try{return JSON.parse(localStorage.getItem('wz_lb2')||'[]');}catch{return[];}}
@@ -384,12 +359,6 @@ function snd(t,vol=1){
         o.type='triangle';o.frequency.value=[660,880,1100][i];o.connect(gg);gg.connect(AC.destination);
         gg.gain.setValueAtTime(0,AC.currentTime+dl);gg.gain.linearRampToValueAtTime(.11*vol,AC.currentTime+dl+.04);
         gg.gain.exponentialRampToValueAtTime(.001,AC.currentTime+dl+.16);o.start(AC.currentTime+dl);o.stop(AC.currentTime+dl+.2);
-      });return;
-    }else if(t==='levelup'){
-      [0,.1,.2,.35].forEach((dl,i)=>{const o=AC.createOscillator(),gg=AC.createGain();
-        o.type='triangle';o.frequency.value=[440,550,660,880][i];o.connect(gg);gg.connect(AC.destination);
-        gg.gain.setValueAtTime(.13*vol,AC.currentTime+dl);gg.gain.exponentialRampToValueAtTime(.001,AC.currentTime+dl+.22);
-        o.start(AC.currentTime+dl);o.stop(AC.currentTime+dl+.26);
       });return;
     }else if(t==='capture'){
       [0,.1,.22,.36].forEach((dl,i)=>{const o=AC.createOscillator(),gg=AC.createGain();
@@ -562,8 +531,6 @@ function drawTripmines(){
   }
 }
 
-// ── XP / Levels — removed ──────────────────────
-function addXP(amount){} // XP system removed
 
 
 function onKill(){
@@ -586,7 +553,7 @@ function triggerAirstrike(){
       shakeAmt=Math.max(shakeAmt,13);
       for(const t of territories)for(const b of t.bots){
         if(!b.alive)continue;const d=Math.hypot(b.x-tx,b.y-ty);
-        if(d<95){b.hit(75*(1-d/95));if(!b.alive){totalKills++;stats.kills++;onKill();addXP(XP_PER_KILL);}}
+        if(d<95){b.hit(75*(1-d/95));if(!b.alive){totalKills++;stats.kills++;onKill();}}
       }
     },1200+i*500);
   }
@@ -607,7 +574,7 @@ function triggerNuke(){
     for(const t of territories)for(const b of t.bots){
       if(!b.alive||b.team==='player')continue;
       const d=Math.hypot(b.x-nx,b.y-ny);
-      if(d<NUKE_STRIKE_RADIUS){b.hit(999);if(!b.alive){totalKills++;stats.kills++;onKill();addXP(XP_PER_KILL);}}
+      if(d<NUKE_STRIKE_RADIUS){b.hit(999);if(!b.alive){totalKills++;stats.kills++;onKill();}}
     }
     // Also hurt the player a little if in blast radius (nuke is risky!)
     if(player?.alive&&!player.shOn){
@@ -1011,7 +978,6 @@ class Bot{
         spark(this.x,this.y,'#ffffff',25,8);
         spark(this.x,this.y,this.col,30,18);
         shakeAmt=35;lightningFlash=0.6;
-        addXP(XP_PER_BOSS);
         snd('nuke');
         // Remove from bossBots array
         const idx=bossBots.indexOf(this);if(idx>-1)bossBots.splice(idx,1);
@@ -1252,7 +1218,6 @@ function checkCapture(){
       t.bossRef=null;
       // Overwrite CD colours for this territory's rendering so it looks like player's land
       // (we use t.country so CD[player.country] is automatically used everywhere already)
-      snd('capture');stats.zonesCapt++;addXP(XP_PER_ZONE);
       shakeAmt=Math.max(shakeAmt,8);
       t.bots=[];
       for(let i=0;i<6;i++){const[bx,by]=randomInTerr(t);t.bots.push(new Bot(bx,by,player.country,'player',t,false,'grunt'));}
@@ -1460,11 +1425,6 @@ function drawStrikeWarnings(){
 let _prevKills=0,_prevZones=0;
 function updateHUD(){
   if(!player)return;
-  dailyChallenges.forEach((ch,i)=>{
-    if(challengeDone[i])return;
-    const prog=stats[ch.stat]||0;
-    if(prog>=ch.goal){challengeDone[i]=true;addXP(500);}
-  });
 }
 function bumpEl(id){}
 
@@ -1495,7 +1455,6 @@ function startGame(){
   player=new Player(selC,name);
   for(const t of territories)spawnBots(t,selC);
   initRain();spawnTripmines();
-  dailyChallenges=getDailyChallenges();
   camera.x=player.x-canvas.width/2;camera.y=player.y-canvas.height/2;
   reinTimer=REINFORCE_INTERVAL;lastT=performance.now();
   requestAnimationFrame(loop);
@@ -1587,7 +1546,7 @@ function tick(dt){
           const dmg=b.dmg||22;bot.hit(dmg);stats.dmgDealt+=dmg;b.alive=false;hit=true;
           if(b.team==='player')stats.shotsHit++;
           if(!bot.alive){
-            if(b.team==='player'){totalKills++;stats.kills++;onKill();addXP(bot.isBoss?XP_PER_BOSS:XP_PER_KILL);}
+            if(b.team==='player'){totalKills++;stats.kills++;onKill();}
           }break;
         }
         if(hit)break;
