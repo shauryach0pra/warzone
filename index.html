@@ -186,7 +186,6 @@ const SHOOT_RNG=230,DETECT_RNG=280,MELEE_RNG=48; // Shooting range, Detection ra
 // Damage and bonuses
 const MELEE_DMG=13,LOC_BONUS=120; // Melee damage, Location of interest bonus
 // Timers (milliseconds)
-const REINFORCE_INTERVAL=60000; // How often reinforcements arrive
 const NIGHT_CYCLE=300000; // Day/night cycle duration
 // Enemy airstrike system
 const ENEMY_STRIKE_MIN=35000,ENEMY_STRIKE_MAX=65000; // Random interval between enemy strikes (35-65 seconds)
@@ -270,7 +269,7 @@ const SHAPES={
     [2100,1150],[3200,1150],[3200,2600],[2100,2600]
   ],
   as:makePentagon(4300,1100,1180,860),
-  au:makeHex(4260,2520,430),
+  au:makeHex(4460,2520,430),
   an:[ // Rectangle — Antarctica (bottom strip with margin)
     [100,3380],[5300,3380],[5300,3700],[100,3700]
   ]
@@ -294,14 +293,15 @@ let bullets=[],particles=[],explosions=[],tripmines=[]; // Arrays for active gam
 // Camera and input systems
 let camera={x:0,y:0},keys={},mouse={x:0,y:0},mw={x:0,y:0}; // Camera position, keyboard state, mouse position
 // Game timers and counters
-let lastT=0,curZone='',reinTimer=0; // Last frame time, current zone, reinforcement timer
+let lastT=0,curZone=''; // Last frame time, current zone
 const _tt={}; // Toast timer storage for UI notifications
 // Boss system — per-territory bosses, one per country when near defeat
 let bossBots=[]; // Active territory bosses
 let killStreak=0,totalKills=0; // Current kill streak and total kills for player abilities
 let shakeAmt=0,shakeX=0,shakeY=0; // Screen shake system for explosions and impacts
-let timeOfDay=0.05,rainDrops=[]; // Day/night cycle and rain particle system
-let weatherState='clear',weatherTimer=55000,windX=0,lightningFlash=0,lightningTimer=0; // Weather system with timers
+let timeOfDay=0.05; // Day/night cycle only
+let lightningFlash=0; // Lightning flash for nuke and boss death effects
+// Weather system removed
 // Player statistics tracking
 const stats={kills:0,zonesCapt:0,dollarsTotal:0,crits:0,shotsFired:0,shotsHit:0,dmgDealt:0,dmgTaken:0,surviveTime:0};
 
@@ -348,10 +348,33 @@ function snd(t,vol=1){
       g.gain.setValueAtTime(v*vol,AC.currentTime);g.gain.exponentialRampToValueAtTime(.001,AC.currentTime+dur);
       o.start();o.stop(AC.currentTime+dur+.01);
     };
-    if(t==='shoot')noise(.055,900,.17);
-    else if(t==='sniper')noise(.1,2200,.28);
-    else if(t==='shotgun')noise(.09,400,.34);
-    else if(t==='hit')noise(.08,600,.26);
+    if(t==='shoot'){ // AK-47: rhythmic burst sound
+      [0,.02,.04].forEach((dl,i)=>{noise(.03,800+i*200,.15);});
+    }
+    else if(t==='sniper'){ // SNIPER: sharp crack with echo
+      noise(.04,2800,.25);
+      setTimeout(()=>noise(.06,1400,.12),80);
+    }
+    else if(t==='shotgun'){ // SHOTGUN: deep boom with multiple pellets
+      noise(.08,300,.4);
+      [0,.01,.02,.03].forEach((dl,i)=>{noise(.02,600+i*100,.2);});
+    }
+    else if(t==='hit'){ // Classic player damage sound
+      [0,.03,.06].forEach((dl,i)=>{const o=AC.createOscillator(),gg=AC.createGain();
+        o.type='sawtooth';o.frequency.value=[200,150,100][i];o.connect(gg);gg.connect(AC.destination);
+        gg.gain.setValueAtTime(.3*vol,AC.currentTime+dl);gg.gain.exponentialRampToValueAtTime(.001,AC.currentTime+dl+.15);
+        o.start(AC.currentTime+dl);o.stop(AC.currentTime+dl+.2);
+      });
+      return;
+    }
+    else if(t==='enemyhit'){ // Enemy damage sound - higher pitch, shorter
+      [0,.02].forEach((dl,i)=>{const o=AC.createOscillator(),gg=AC.createGain();
+        o.type='square';o.frequency.value=[400,350][i];o.connect(gg);gg.connect(AC.destination);
+        gg.gain.setValueAtTime(.2*vol,AC.currentTime+dl);gg.gain.exponentialRampToValueAtTime(.001,AC.currentTime+dl+.1);
+        o.start(AC.currentTime+dl);o.stop(AC.currentTime+dl+.15);
+      });
+      return;
+    }
     else if(t==='shield'){tone(440,'sine',.05,.12);tone(1100,'sine',.2,.1);}
     else if(t==='crit')tone(1200,'square',.07,.09);
     else if(t==='pickup'){
@@ -368,6 +391,14 @@ function snd(t,vol=1){
       });return;
     }else if(t==='death')tone(240,'sawtooth',.8,.22);
     else if(t==='explosion')noise(.5,380,.5);
+    else if(t==='tripmine'){
+      [0,.05,.1,.15].forEach((dl,i)=>{const o=AC.createOscillator(),gg=AC.createGain();
+        o.type=i%2===0?'square':'sawtooth';o.frequency.value=[80,120,60,40][i];o.connect(gg);gg.connect(AC.destination);
+        gg.gain.setValueAtTime(.25*vol,AC.currentTime+dl);gg.gain.exponentialRampToValueAtTime(.001,AC.currentTime+dl+.3);
+        o.start(AC.currentTime+dl);o.stop(AC.currentTime+dl+.35);
+      });
+      return;
+    }
     else if(t==='nuke')noise(.9,250,.65);
     else if(t==='reinforce')tone(180,'square',.32,.09);
     else if(t==='thunder')noise(.9,300,.44);
@@ -469,14 +500,12 @@ function spawnTripmines(){
     let x,y,attempts=0;
     do{x=300+Math.random()*(WW-600);y=300+Math.random()*(WH-600);attempts++;}
     while(getTAt(x,y)!==null&&attempts<80);
-    tripmines.push({x,y,alive:true,armed:false,armTimer:2000,pulse:Math.random()*Math.PI*2});
+    tripmines.push({x,y,alive:true,armed:true,pulse:Math.random()*Math.PI*2});
   }
 }
 function updateTripmines(dt){
   for(const m of tripmines){
     if(!m.alive)continue;
-    if(!m.armed){m.armTimer-=dt;if(m.armTimer<=0)m.armed=true;}
-    if(!m.armed)continue;
     // Check player
     if(player?.alive){
       const d=Math.hypot(player.x-m.x,player.y-m.y);
@@ -485,6 +514,7 @@ function updateTripmines(dt){
         explosions.push({x:m.x,y:m.y,r:0,maxR:70,life:1,col:'#ff6600'});
         spark(m.x,m.y,'#ff4400',22,6);spark(m.x,m.y,'#ffcc44',10,3);
         shakeAmt=Math.max(shakeAmt,18);
+        snd('tripmine');
         if(!player.shOn){const dmg=55;player.hp-=dmg;stats.dmgTaken+=dmg;snd('hit');shakeAmt=20;}
         else{shakeAmt=20;}
         continue;
@@ -500,6 +530,7 @@ function updateTripmines(dt){
           explosions.push({x:m.x,y:m.y,r:0,maxR:70,life:1,col:'#ff6600'});
           spark(m.x,m.y,'#ff4400',22,6);spark(m.x,m.y,'#ffcc44',10,3);
           shakeAmt=Math.max(shakeAmt,8);
+          snd('tripmine');
           b.hit(55);break;
         }
       }
@@ -630,7 +661,6 @@ class Bullet{
     this.isBlast=false;this.blastRadius=BOSS_BLAST_RADIUS;this.blastCol=null;this.rad=BUL_RAD;}
   update(){
     this.trail.push({x:this.x,y:this.y});if(this.trail.length>6)this.trail.shift();
-    if(weatherState==='storm')this.vx+=windX*.04;
     this.x+=this.vx;this.y+=this.vy;
     this.dist+=Math.hypot(this.vx,this.vy);
     if(this.x<0||this.x>WW||this.y<0||this.y>WH||this.dist>this.range*2.1){
@@ -973,9 +1003,9 @@ class Bot{
       if(this.isBoss){
         // Massive country-colored death explosion
         explosions.push({x:this.x,y:this.y,r:0,maxR:220,life:1,col:this.col});
-        explosions.push({x:this.x,y:this.y,r:0,maxR:140,life:1,col:'#ffffff'});
+        explosions.push({x:this.x,y:this.y,r:0,maxR:140,life:1,col:this.col});
         spark(this.x,this.y,this.col,50,12);
-        spark(this.x,this.y,'#ffffff',25,8);
+        spark(this.x,this.y,this.col,25,8);
         spark(this.x,this.y,this.col,30,18);
         shakeAmt=35;lightningFlash=0.6;
         snd('nuke');
@@ -1059,7 +1089,6 @@ class Player{
     if(keys.KeyA||keys.ArrowLeft)mx-=1;if(keys.KeyD||keys.ArrowRight)mx+=1;
     if(mx&&my){mx*=.707;my*=.707;}
     let spd=P_SPD_BASE*(1+this.upgrades.speed*.1);
-    if(weatherState==='rain')spd*=.83;if(weatherState==='storm')spd*=.72;
     const prevX=this.x, prevY=this.y;
     this.x+=mx*spd; this.y+=my*spd;
     // Globe wrapping — snap camera when crossing edge to avoid lerp glitch
@@ -1154,18 +1183,9 @@ function spawnBots(t,pc){
   }
 }
 
-// ── Reinforcements — only for player's own territories, enemies NEVER respawn ─
+// ── Reinforcements removed — soldiers only spawn when capturing new continents ─
 function doReinforcements(){
-  for(const t of territories){
-    // Only reinforce player-owned territories (enemies stay dead once cleared)
-    if(t.country!==player?.country)continue;
-    if(t.bots.filter(b=>b.alive).length>3)continue;
-    for(let i=0;i<2;i++){
-      const[bx,by]=randomInTerr(t);
-      const st=getSoldierType(t.country);
-      t.bots.push(new Bot(bx,by,t.country,'player',t,false,st));
-    }
-  }
+  // Soldiers only spawn when capturing new continents now
 }
 
 // ── Hex to RGB helper for boss visuals ────────────
@@ -1223,17 +1243,12 @@ function checkCapture(){
       for(let i=0;i<6;i++){const[bx,by]=randomInTerr(t);t.bots.push(new Bot(bx,by,player.country,'player',t,false,'grunt'));}
     }
   }
-}
-
-// ── Rain ───────────────────────────────────────
-function initRain(){rainDrops=[];for(let i=0;i<110;i++)rainDrops.push({x:Math.random()*WW,y:Math.random()*WH,spd:8+Math.random()*5,len:8+Math.random()*10});}
-function updateRain(dt){for(const r of rainDrops){r.y+=r.spd*(dt/14);r.x+=windX*(dt/14);if(r.y>WH)r.y=-10;if(r.x>WW)r.x=0;if(r.x<0)r.x=WW;}}
-function drawRain(alpha){
-  ctx.save();ctx.strokeStyle=`rgba(160,200,255,${alpha})`;ctx.lineWidth=.7;
-  for(const r of rainDrops){const sx=r.x-camera.x+shakeX,sy=r.y-camera.y+shakeY;
-    if(sx<-20||sx>canvas.width+20||sy<-20||sy>canvas.height+20)continue;
-    ctx.beginPath();ctx.moveTo(sx-windX*.3,sy);ctx.lineTo(sx+windX*.15,sy+r.len);ctx.stroke();}
-  ctx.restore();
+  
+  // Check for victory - player owns all territories
+  const allOwned=territories.every(t=>t.country===player.country);
+  if(allOwned){
+    endGame('victory');
+  }
 }
 
 // ── Check if player is in any active airstrike zone ─
@@ -1454,9 +1469,9 @@ function startGame(){
   keys={}; // Reset keys to prevent automatic movement
   player=new Player(selC,name);
   for(const t of territories)spawnBots(t,selC);
-  initRain();spawnTripmines();
+  spawnTripmines();
   camera.x=player.x-canvas.width/2;camera.y=player.y-canvas.height/2;
-  reinTimer=REINFORCE_INTERVAL;lastT=performance.now();
+  lastT=performance.now();
   requestAnimationFrame(loop);
 }
 
@@ -1488,17 +1503,7 @@ function tick(dt){
   shakeAmt*=.83;shakeX=(Math.random()-.5)*shakeAmt*2;shakeY=(Math.random()-.5)*shakeAmt*2;
   if(shakeAmt<.1){shakeAmt=0;shakeX=0;shakeY=0;}
   
-  // Weather system updates
-  weatherTimer-=dt;
-  if(weatherTimer<=0){
-    const ws=['clear','rain','fog','storm','clear','clear']; // Weather types (weighted towards clear)
-    weatherState=ws[Math.floor(Math.random()*ws.length)];
-    weatherTimer=45000+Math.random()*55000; // 45-100 seconds between weather changes
-    windX=weatherState==='storm'?(Math.random()-.5)*4:0; // Wind only during storms
-  }
-  if(weatherState==='rain'||weatherState==='storm')updateRain(dt); // Update rain particles
   lightningFlash*=.88; // Lightning flash decay
-  if(weatherState==='storm'){lightningTimer-=dt;if(lightningTimer<=0){lightningTimer=3000+Math.random()*8000;lightningFlash=1;}}
   timeOfDay+=dt/NIGHT_CYCLE;if(timeOfDay>=1)timeOfDay-=1;
   for(const t of territories)for(const b of t.bots)b.update(dt);
   for(const boss of bossBots){if(boss.alive)boss.update(dt);}
@@ -1530,7 +1535,7 @@ function tick(dt){
           const hitR=b.isBlast?b.rad*1.5:BUL_RAD;
           if(Math.hypot(b.x-bot.x,b.y-bot.y)<bot.rad+hitR){
             if(b.isBlast){b.alive=false;bossBlastExplode(b.x,b.y,b.blastRadius||BOSS_BLAST_RADIUS,b.blastCol||'#ff6600');}
-            else{const dmg=b.dmg||22;bot.hit(dmg);b.alive=false;spark(bot.x,bot.y,'#ff4444',4);snd('hit');}
+            else{const dmg=b.dmg||22;bot.hit(dmg);b.alive=false;spark(bot.x,bot.y,'#ff4444',4);}
             break;
           }
         }
@@ -1544,7 +1549,7 @@ function tick(dt){
         if(!bot.alive||bot.team==='player')continue;
         if(Math.hypot(b.x-bot.x,b.y-bot.y)<bot.rad+BUL_RAD){
           const dmg=b.dmg||22;bot.hit(dmg);stats.dmgDealt+=dmg;b.alive=false;hit=true;
-          if(b.team==='player')stats.shotsHit++;
+          if(b.team==='player'){stats.shotsHit++;snd('enemyhit');}
           if(!bot.alive){
             if(b.team==='player'){totalKills++;stats.kills++;onKill();}
           }break;
@@ -1557,7 +1562,6 @@ function tick(dt){
   bullets=bullets.filter(b=>b.alive);
   for(const p of particles){p.x+=p.vx;p.y+=p.vy;p.vx*=.87;p.vy*=.87;p.life-=p.txt?.022:.028;}
   particles=particles.filter(p=>p.life>0);
-  reinTimer-=dt;if(reinTimer<=0){reinTimer=REINFORCE_INTERVAL;doReinforcements();}
   updateHUD();
 }
 
@@ -1567,8 +1571,6 @@ function render_(dt=0){
   for(const t of territories)drawTerr(t,dt);
   drawStrikeWarnings();
   drawExplosions();
-  if(weatherState==='rain'||weatherState==='storm')drawRain(weatherState==='storm'?.28:.18);
-  if(weatherState==='fog'){ctx.fillStyle='rgba(175,195,185,.1)';ctx.fillRect(0,0,canvas.width,canvas.height);}
   const nop=getNightOp();
   if(nop>0.04){ctx.fillStyle=`rgba(5,0,20,${nop*.7})`;ctx.fillRect(0,0,canvas.width,canvas.height);}
   if(lightningFlash>0.05){ctx.fillStyle=`rgba(235,235,255,${lightningFlash*.32})`;ctx.fillRect(0,0,canvas.width,canvas.height);}
@@ -1596,9 +1598,9 @@ function endGame(type='death'){
   saveLB(player?.name||'UNKNOWN',player?.country||'as',score);
   const isVic=type==='victory';
   const et=document.getElementById('endTitle'),es=document.getElementById('endSub'),eb=document.getElementById('endBtn');
-  // Title is always "RIP" in the big glowing Oswald style
-  et.textContent='RIP';
-  et.className='end-title'; // always red pulsing
+  // Show "Victory" for victory, "RIP" for death
+  et.textContent=isVic?'VICTORY':'RIP';
+  et.className=isVic?'end-title victory':'end-title'; // green for victory, red for death
   if(isVic){
     es.style.color='#3a6a3a';es.textContent=`🏆 ${CD[player.country].flag} ${player.name.toUpperCase()} DOMINATES THE WORLD`;
   }else{
