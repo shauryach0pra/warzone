@@ -301,6 +301,7 @@ let killStreak=0,totalKills=0; // Current kill streak and total kills for player
 let shakeAmt=0,shakeX=0,shakeY=0; // Screen shake system for explosions and impacts
 let timeOfDay=0.05; // Day/night cycle only
 let lightningFlash=0; // Lightning flash for nuke and boss death effects
+let shieldUsed=false; // Track if shield has been used once in the game
 // Weather system removed
 // Player statistics tracking
 const stats={kills:0,zonesCapt:0,dollarsTotal:0,crits:0,shotsFired:0,shotsHit:0,dmgDealt:0,dmgTaken:0,surviveTime:0};
@@ -479,14 +480,15 @@ function launchEnemyStrike(){
   const count=2+Math.floor(Math.random()*2); // 2-3 strikes
   const enemies=territories.filter(t=>t.country!==player.country&&t.country!=='neutral');
   const src=enemies[Math.floor(Math.random()*enemies.length)];
+  const playerTerritories=territories.filter(t=>t.country===player.country);
+  if(playerTerritories.length===0)return;
   snd('strike_warn');
   for(let i=0;i<count;i++){
-    // Each strike lands on/near the player's current position
-    // Stagger their timings slightly
+    // Each strike lands on a random point in a random player-owned continent
     setTimeout(()=>{
       if(!player?.alive)return;
-      const tx=Math.max(100,Math.min(WW-100,player.x+(Math.random()-0.5)*180));
-      const ty=Math.max(100,Math.min(WH-100,player.y+(Math.random()-0.5)*180));
+      const targetTerr=playerTerritories[Math.floor(Math.random()*playerTerritories.length)];
+      const [tx,ty]=randomInTerr(targetTerr);
       enemyStrikes.push({x:tx,y:ty,radius:STRIKE_RADIUS,warnLeft:STRIKE_WARN_TIME,hit:false,hitAge:0,srcCountry:src?.country||'as',strikeIdx:i});
     },i*1200);
   }
@@ -645,7 +647,7 @@ function doShoot(){
   if(isCrit)shakeAmt=Math.max(shakeAmt,3);
   spark(player.x+Math.cos(player.angle)*20,player.y+Math.sin(player.angle)*20,'#ffcc44',2);
 }
-function activateShield(){if(!player||player.shCD>0||player.shOn)return;player.shOn=true;player.shT=SHIELD_DUR;snd('shield');}
+function activateShield(){if(!player||player.shCD>0||player.shOn||shieldUsed)return;player.shOn=true;player.shT=SHIELD_DUR;shieldUsed=true;snd('shield');}
 
 // ── Toast helper ───────────────────────────────
 function showToast(id,msg,dur=1800){
@@ -1602,7 +1604,7 @@ function endGame(type='death'){
   et.textContent=isVic?'VICTORY':'RIP';
   et.className=isVic?'end-title victory':'end-title'; // green for victory, red for death
   if(isVic){
-    es.style.color='#3a6a3a';es.textContent=`🏆 ${CD[player.country].flag} ${player.name.toUpperCase()} DOMINATES THE WORLD`;
+    es.style.color='#3a6a3a';es.textContent='';
   }else{
     es.style.color='#3a2a2a';es.textContent='';
   }
